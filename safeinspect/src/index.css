@@ -1,0 +1,140 @@
+@import url('https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;1,9..40,400&family=JetBrains+Mono:wght@400;500&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ─── CSS custom properties (Radix/shadcn compatibility) ─────── */
+@layer base {
+  :root {
+    /* Map to surface-base dark theme */
+    --background: 222 47% 11%;         /* #0f172a */
+    --foreground: 210 40% 96%;
+
+    --card: 217 32% 17%;               /* #1e293b */
+    --card-foreground: 210 40% 96%;
+
+    --border: 215 25% 35%;             /* #475569 */
+    --input: 215 25% 35%;
+    --ring: 25 95% 53%;                /* brand-orange */
+
+    --primary: 25 95% 53%;             /* brand-orange */
+    --primary-foreground: 0 0% 100%;
+
+    --secondary: 217 32% 17%;
+    --secondary-foreground: 210 40% 96%;
+
+    --destructive: 0 72% 51%;
+    --destructive-foreground: 0 0% 100%;
+
+    --muted: 215 25% 25%;
+    --muted-foreground: 215 20% 65%;
+
+    --accent: 217 32% 25%;
+    --accent-foreground: 210 40% 96%;
+
+    --radius: 0.75rem;
+  }
+}
+
+/* ─── Base resets ─────────────────────────────────────────────── */
+@layer base {
+  * {
+    @apply border-border;
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  html {
+    /* Prevent font size inflation on mobile */
+    -webkit-text-size-adjust: 100%;
+    text-size-adjust: 100%;
+  }
+
+  body {
+    @apply bg-surface-base text-foreground font-sans antialiased;
+    /* Smooth scrolling everywhere */
+    scroll-behavior: smooth;
+  }
+
+  /* Ensure inputs look native-like on iOS */
+  input, textarea, select {
+    @apply appearance-none;
+  }
+
+  /* Remove number input arrows */
+  input[type='number']::-webkit-inner-spin-button,
+  input[type='number']::-webkit-outer-spin-button {
+    @apply appearance-none;
+  }
+}
+
+/* ─── Utility components ─────────────────────────────────────── */
+@layer components {
+  /* Status badge variants */
+  .badge-compliant {
+    @apply bg-status-compliant-bg text-status-compliant text-xs font-semibold px-2.5 py-1 rounded-full uppercase tracking-wide;
+  }
+
+  .badge-noncompliant {
+    @apply bg-status-noncompliant-bg text-status-noncompliant text-xs font-semibold px-2.5 py-1 rounded-full uppercase tracking-wide;
+  }
+
+  .badge-recommendation {
+    @apply bg-status-recommendation-bg text-status-recommendation text-xs font-semibold px-2.5 py-1 rounded-full uppercase tracking-wide;
+  }
+
+  .badge-na {
+    @apply bg-status-na-bg text-status-na text-xs font-semibold px-2.5 py-1 rounded-full uppercase tracking-wide;
+  }
+
+  /* Priority indicators */
+  .priority-dot-1 {
+    @apply w-2.5 h-2.5 rounded-full bg-priority-1;
+  }
+  .priority-dot-2 {
+    @apply w-2.5 h-2.5 rounded-full bg-priority-2;
+  }
+  .priority-dot-3 {
+    @apply w-2.5 h-2.5 rounded-full bg-priority-3;
+  }
+
+  /* Touch-target safe buttons */
+  .btn-primary {
+    @apply h-touch-lg rounded-xl font-display font-semibold text-lg tracking-wide;
+    @apply bg-brand-orange text-white shadow-lg;
+    @apply flex items-center justify-center gap-2;
+    @apply hover:bg-orange-500 active:scale-[0.98] transition-all duration-150;
+    @apply disabled:opacity-60 disabled:cursor-not-allowed disabled:active:scale-100;
+  }
+
+  .btn-secondary {
+    @apply h-touch rounded-xl font-display font-semibold tracking-wide;
+    @apply bg-surface-overlay text-white border border-surface-border;
+    @apply flex items-center justify-center gap-2;
+    @apply hover:bg-surface-border active:scale-[0.98] transition-all duration-150;
+    @apply disabled:opacity-60 disabled:cursor-not-allowed;
+  }
+
+  /* Card surface */
+  .card {
+    @apply bg-surface-raised rounded-2xl border border-surface-border;
+  }
+
+  /* Section header */
+  .section-header {
+    @apply font-display text-xl font-bold text-white tracking-wide uppercase;
+  }
+
+  /* Form field label */
+  .field-label {
+    @apply text-field-label font-medium text-slate-300 uppercase tracking-widest;
+  }
+
+  /* Form input */
+  .field-input {
+    @apply w-full h-touch bg-surface-base border border-surface-border rounded-xl px-4 text-white text-field-value;
+    @apply placeholder:text-slate-600;
+    @apply focus:outline-none focus:ring-2 focus:ring-brand-orange/60;
+    @apply hover:border-slate-500 transition-colors;
+  }
+}
