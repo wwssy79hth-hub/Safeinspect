@@ -202,19 +202,6 @@ export function EmptyState({ icon, title, description, action }: EmptyStateProps
   )
 }
 
-// ─── Report number generator ──────────────────────────────────
-
-/**
- * Generates a report number in the format AB-YYYY-XXXX
- * where XXXX is a zero-padded sequence number.
- * In production this should come from a DB sequence.
- */
-export function generateReportNumber(sequence?: number): string {
-  const year = new Date().getFullYear()
-  const seq  = sequence ?? Math.floor(Math.random() * 9000) + 1000
-  return `AB-${year}-${String(seq).padStart(4, '0')}`
-}
-
 // ─── Sunlight-mode helper ─────────────────────────────────────
 
 /**
@@ -223,6 +210,7 @@ export function generateReportNumber(sequence?: number): string {
  * Apply via CSS media query in future; for now this gives
  * the correct classes to use.
  */
+
 export const SUNLIGHT = {
   // Use these instead of text-slate-500 on dark surfaces outdoors
   label:       'text-slate-300',

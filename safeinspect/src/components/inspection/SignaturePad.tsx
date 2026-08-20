@@ -1,6 +1,6 @@
 import { useRef, useState, useCallback } from 'react'
 import SignatureCanvas from 'react-signature-canvas'
-import { CheckCircle2, RotateCcw, Save, PenTool, User, Users, AlertCircle, Upload } from 'lucide-react'
+import { CheckCircle2, RotateCcw, PenTool, AlertCircle, Upload } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { supabase } from '@/lib/supabase'
 
@@ -85,7 +85,6 @@ function SinglePad({
     }
   }, [inspectionId, role, onSaved])
 
-  const roleIcon = role === 'certifier' ? User : Users
 
   return (
     <div className={cn(

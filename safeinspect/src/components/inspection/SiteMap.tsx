@@ -1,5 +1,5 @@
 import {
-  useState, useRef, useCallback, useEffect, type MouseEvent, type TouchEvent,
+  useState, useRef, useCallback, type MouseEvent,
 } from 'react'
 import {
   Upload, ZoomIn, ZoomOut, RotateCcw, Save, MapPin, X,

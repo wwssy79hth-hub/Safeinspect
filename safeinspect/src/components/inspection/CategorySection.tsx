@@ -1,14 +1,13 @@
 import { useState, useRef, useCallback } from 'react'
 import {
   ChevronDown, Plus, CheckCircle2, XCircle, AlertCircle,
-  MinusCircle, Layers,
+  MinusCircle,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useInspectionStore } from '@/store/inspection.store'
 import { AssetItemForm } from './AssetItemForm'
 import type { AssetCategory, InspectionAsset } from '@/types/database'
 import { ASSET_CATEGORY_LABELS } from '@/types/database'
-import { ASSET_STATUS_CONFIG } from '@/lib/inspection-data'
 
 // ─── Category icons ───────────────────────────────────────────
 // Each category gets a representative icon for quick identification
@@ -58,7 +57,7 @@ interface CategorySectionProps {
 export function CategorySection({
   inspectionId, category, highlightAssetCode, onOpenMap, defaultExpanded = false,
 }: CategorySectionProps) {
-  const { assetsByCategory, getNextAssetCode } = useInspectionStore()
+  const { assetsByCategory } = useInspectionStore()
   const [expanded, setExpanded] = useState(defaultExpanded)
   const [addingNew, setAddingNew] = useState(false)
   const newFormRef = useRef<HTMLDivElement>(null)
