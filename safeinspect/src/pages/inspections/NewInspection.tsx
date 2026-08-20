@@ -10,7 +10,7 @@ import {
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useAuthStore } from '@/store/auth.store'
-import { useInspectionStore, selectDraftComplete } from '@/store/inspection.store'
+import { useInspectionStore } from '@/store/inspection.store'
 import type { IssueType } from '@/types/database'
 
 // ─── Validation schema ────────────────────────────────────────
@@ -234,7 +234,7 @@ export default function NewInspection() {
   const gps = useGPS()
 
   const {
-    register, handleSubmit, setValue, watch,
+    register, handleSubmit, watch,
     formState: { errors },
   } = useForm<FormValues>({
     resolver: zodResolver(schema),

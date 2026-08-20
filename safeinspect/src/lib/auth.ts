@@ -1,5 +1,8 @@
+import type { AuthChangeEvent, Session } from '@supabase/supabase-js'
 import { supabase } from '@/lib/supabase'
-import type { Profile } from '@/types/database'
+import type { Database, Profile } from '@/types/database'
+
+export type ProfileUpsert = Database['public']['Tables']['profiles']['Insert']
 
 // ─── Types ───────────────────────────────────────────────────
 
@@ -124,7 +127,7 @@ export const authService = {
   /**
    * Upsert profile (called after sign-up or profile edits).
    */
-  async upsertProfile(profile: Partial<Profile> & { id: string }): Promise<Profile> {
+  async upsertProfile(profile: ProfileUpsert): Promise<Profile> {
     const { data, error } = await supabase
       .from('profiles')
       .upsert({ ...profile, updated_at: new Date().toISOString() })
@@ -139,7 +142,7 @@ export const authService = {
    * Subscribe to auth state changes. Returns the unsubscribe function.
    */
   onAuthStateChange(
-    callback: (event: string, session: Awaited<ReturnType<typeof authService.getSession>>) => void
+    callback: (event: AuthChangeEvent, session: Session | null) => void
   ) {
     const { data } = supabase.auth.onAuthStateChange((event, session) => {
       callback(event, session)

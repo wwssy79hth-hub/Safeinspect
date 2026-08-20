@@ -8,20 +8,28 @@
 import { create } from 'zustand'
 import { devtools, persist } from 'zustand/middleware'
 import { supabase } from '@/lib/supabase'
+import type { Database } from '@/types/database'
 
 // ─── Queue item shape ─────────────────────────────────────────
 
-export type QueuedOpType =
-  | 'upsert_asset'
-  | 'delete_asset'
-  | 'update_inspection'
-  | 'save_markers'
-  | 'upload_photo'
+type AssetUpsert = Database['public']['Tables']['inspection_assets']['Insert']
+type InspectionUpdate = Database['public']['Tables']['inspections']['Update']
 
-export interface QueuedOp {
+export type QueuedOpType = QueuedOp['type']
+
+/**
+ * Each op carries a payload shaped for the table it targets, so a queued
+ * mutation is type-checked at enqueue time rather than failing at replay.
+ */
+export type QueuedOpPayload =
+  | { type: 'upsert_asset';      payload: AssetUpsert }
+  | { type: 'delete_asset';      payload: { id: string } }
+  | { type: 'update_inspection'; payload: { id: string } & InspectionUpdate }
+  | { type: 'save_markers';      payload: { id: string; notes: string | null; drawing_scaled: boolean | null } }
+  | { type: 'upload_photo';      payload: { inspection_id: string; asset_id: string; storage_path: string } }
+
+export type QueuedOp = QueuedOpPayload & {
   id: string
-  type: QueuedOpType
-  payload: Record<string, unknown>
   createdAt: string
   retries: number
   lastError?: string
@@ -34,7 +42,7 @@ interface SyncQueueState {
   isSyncing: boolean
   lastSyncedAt: string | null
 
-  enqueue: (type: QueuedOpType, payload: Record<string, unknown>) => void
+  enqueue: <T extends QueuedOpPayload>(type: T['type'], payload: T['payload']) => void
   dequeue: (id: string) => void
   flush: () => Promise<void>
   clearAll: () => void
@@ -47,7 +55,7 @@ async function executeOp(op: QueuedOp): Promise<void> {
     case 'upsert_asset': {
       const { error } = await supabase
         .from('inspection_assets')
-        .upsert(op.payload as Record<string, unknown>)
+        .upsert(op.payload)
       if (error) throw error
       break
     }
@@ -55,7 +63,7 @@ async function executeOp(op: QueuedOp): Promise<void> {
       const { error } = await supabase
         .from('inspection_assets')
         .delete()
-        .eq('id', op.payload.id as string)
+        .eq('id', op.payload.id)
       if (error) throw error
       break
     }
@@ -64,7 +72,7 @@ async function executeOp(op: QueuedOp): Promise<void> {
       const { error } = await supabase
         .from('inspections')
         .update(patch)
-        .eq('id', id as string)
+        .eq('id', id)
       if (error) throw error
       break
     }
@@ -73,7 +81,7 @@ async function executeOp(op: QueuedOp): Promise<void> {
       const { error } = await supabase
         .from('inspections')
         .update({ notes, drawing_scaled })
-        .eq('id', id as string)
+        .eq('id', id)
       if (error) throw error
       break
     }
@@ -99,13 +107,13 @@ export const useSyncQueue = create<SyncQueueState>()(
         lastSyncedAt: null,
 
         enqueue: (type, payload) => {
-          const op: QueuedOp = {
+          const op = {
             id:        crypto.randomUUID(),
             type,
             payload,
             createdAt: new Date().toISOString(),
             retries:   0,
-          }
+          } as QueuedOp
           set((s) => ({ queue: [...s.queue, op] }))
         },
 

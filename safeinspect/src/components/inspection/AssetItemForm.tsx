@@ -1,5 +1,5 @@
 import {
-  useState, useEffect, useCallback, useRef,
+  useState, useEffect, useCallback,
 } from 'react'
 import {
   Camera, ImagePlus, X, MapPin, CheckCircle2, XCircle,
@@ -121,7 +121,7 @@ function PhotoStrip(props: ReturnType<typeof usePhotoCapture>) {
 // ─── Smart quick-fill panel ───────────────────────────────────
 
 function QuickFillPanel({
-  category, currentStatus, onApply,
+  category, onApply,
 }: {
   category: AssetCategory
   currentStatus: AssetStatus

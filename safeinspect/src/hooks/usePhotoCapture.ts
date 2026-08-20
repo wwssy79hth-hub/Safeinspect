@@ -21,7 +21,7 @@ interface UsePhotoCaptureOptions {
 
 export function usePhotoCapture({
   inspectionId,
-  assetId,
+  assetId: _assetId,
   userId,
   maxPhotos = 10,
 }: UsePhotoCaptureOptions) {

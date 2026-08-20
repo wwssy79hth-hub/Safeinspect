@@ -2,6 +2,7 @@ import { create } from 'zustand'
 import { devtools, persist } from 'zustand/middleware'
 import { supabase } from '@/lib/supabase'
 import type {
+  Database,
   Inspection,
   InspectionAsset,
   AssetCategory,
@@ -9,6 +10,9 @@ import type {
   IssueType,
   OverallSiteStatus,
 } from '@/types/database'
+
+/** Columns accepted when creating or updating an asset row. */
+export type AssetUpsert = Database['public']['Tables']['inspection_assets']['Insert']
 
 // ─── Site map marker ─────────────────────────────────────────
 // Stored as a JSON column on the inspection row (or a separate table)
@@ -100,7 +104,7 @@ interface InspectionState {
 
   // ── Assets ───────────────────────────────────────────────────
   loadAssets: (inspectionId: string) => Promise<void>
-  upsertAsset: (asset: Partial<InspectionAsset> & { inspection_id: string; category: AssetCategory }) => Promise<InspectionAsset>
+  upsertAsset: (asset: AssetUpsert) => Promise<InspectionAsset>
   deleteAsset: (assetId: string) => Promise<void>
 
   // ── Site map ─────────────────────────────────────────────────

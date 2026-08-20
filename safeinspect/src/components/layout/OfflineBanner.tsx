@@ -1,12 +1,12 @@
 import { useEffect, useState } from 'react'
-import { WifiOff, Wifi, RefreshCw, CheckCircle2, AlertTriangle } from 'lucide-react'
+import { WifiOff, RefreshCw, CheckCircle2, AlertTriangle } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useOnlineStatus } from '@/hooks/useOnlineStatus'
 import { useSyncQueue } from '@/lib/syncQueue'
 
 export function OfflineBanner() {
   const { isOnline, wasOffline } = useOnlineStatus()
-  const { queue, isSyncing, flush, lastSyncedAt } = useSyncQueue()
+  const { queue, isSyncing, flush } = useSyncQueue()
   const [dismissed, setDismissed] = useState(false)
 
   // Auto-flush queue when we come back online

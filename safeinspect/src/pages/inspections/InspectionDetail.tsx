@@ -1,10 +1,10 @@
-import { useState, useEffect, useRef, useCallback } from 'react'
-import { useParams, useNavigate } from 'react-router-dom'
+import { useState, useEffect, useCallback } from 'react'
+import { useParams } from 'react-router-dom'
 import {
-  Map, List, BarChart2, ChevronRight,
-  AlertTriangle, CheckCircle2, XCircle, Clock,
-  FileText, Share2, MoreVertical, Layers,
-  ArrowUpRight, Download, CloudUpload, Loader2,
+  Map, List, BarChart2,
+  AlertTriangle, CheckCircle2, XCircle,
+  Layers,
+  Download, CloudUpload, Loader2,
 } from 'lucide-react'
 import { format, parseISO } from 'date-fns'
 import { cn } from '@/lib/utils'
@@ -29,7 +29,7 @@ type Tab = 'checklist' | 'map' | 'summary'
 
 // ─── Summary table (mirrors Abseal PDF summary table) ────────
 
-function InspectionSummaryTable({ inspectionId }: { inspectionId: string }) {
+function InspectionSummaryTable({ inspectionId: _inspectionId }: { inspectionId: string }) {
   const { getCategorySummaries } = useInspectionStore()
   const summaries = getCategorySummaries()
 
@@ -103,7 +103,6 @@ function InspectionSummaryTable({ inspectionId }: { inspectionId: string }) {
 
 function NonCompliantSummary() {
   const { assets } = useInspectionStore()
-  const navigate = useNavigate()
 
   const issues = assets.filter(
     (a) => a.status === 'non_compliant' || a.status === 'recommendation'
@@ -168,7 +167,6 @@ function NonCompliantSummary() {
 
 export default function InspectionDetail() {
   const { id } = useParams<{ id: string }>()
-  const navigate = useNavigate()
   const user = useAuthStore((s) => s.user)
 
   const {
@@ -229,7 +227,7 @@ export default function InspectionDetail() {
   }, [assets])
 
   // When "Map" is tapped from an asset form → switch to map tab
-  const handleOpenMap = useCallback((assetCode: string) => {
+  const handleOpenMap = useCallback((_assetCode: string) => {
     setTab('map')
   }, [])
 
@@ -310,12 +308,6 @@ export default function InspectionDetail() {
     )
   }
 
-  const categoriesWithItems = ASSET_CATEGORIES.filter(
-    (cat) => (useInspectionStore.getState().assetsByCategory[cat] ?? []).length > 0
-  )
-
-  const completedCount = assets.filter((a) => a.status !== undefined).length
-  const totalCategories = ASSET_CATEGORIES.length
 
   return (
     <div className="max-w-2xl mx-auto lg:max-w-4xl">
