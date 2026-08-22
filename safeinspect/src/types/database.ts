@@ -23,9 +23,18 @@ export type OverallSiteStatus =
   | 'compliant'
   | 'non_compliant'
   | 'partially_compliant'
+  | 'proposed'          // design-stage report — nothing installed yet
 
+/**
+ * The kind of report being produced. This drives the document title,
+ * the declaration wording and — critically — how asset statuses are
+ * presented: a proposed anchor installation has no installed hardware,
+ * so its items are reported as PROPOSED, never COMPLIANT.
+ */
 export type IssueType =
   | 'recertification'
+  | 'new_install_verification'
+  | 'proposed_anchor_installation'
   | 'non_compliant_follow_up'
   | 'initial_inspection'
 
@@ -33,6 +42,7 @@ export type AssetStatus =
   | 'compliant'
   | 'non_compliant'
   | 'recommendation'
+  | 'proposed'          // specified but not yet installed
   | 'n/a'
 
 export type Priority = 1 | 2 | 3

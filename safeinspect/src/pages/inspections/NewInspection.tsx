@@ -12,6 +12,7 @@ import { cn } from '@/lib/utils'
 import { useAuthStore } from '@/store/auth.store'
 import { useInspectionStore, selectDraftComplete } from '@/store/inspection.store'
 import type { IssueType } from '@/types/database'
+import { REPORT_TYPE_CONFIG, REPORT_TYPE_ORDER } from '@/lib/reportTypes'
 
 // ─── Validation schema ────────────────────────────────────────
 
@@ -23,29 +24,24 @@ const schema = z.object({
   job_number:          z.string().optional(),
   quote_number:        z.string().optional(),
   date_of_inspection:  z.string().min(1, 'Inspection date is required'),
-  issue_type:          z.enum(['recertification', 'non_compliant_follow_up', 'initial_inspection']),
+  issue_type:          z.enum([
+    'recertification',
+    'new_install_verification',
+    'proposed_anchor_installation',
+    'non_compliant_follow_up',
+    'initial_inspection',
+  ]),
 })
 type FormValues = z.infer<typeof schema>
 
-// ─── Issue type options ───────────────────────────────────────
+// ─── Report type options ──────────────────────────────────────
 
-const ISSUE_TYPES: { value: IssueType; label: string; sub: string }[] = [
-  {
-    value: 'recertification',
-    label: 'Recertification',
-    sub: 'Annual AS1891.4:2009 recertification',
-  },
-  {
-    value: 'initial_inspection',
-    label: 'Initial Inspection',
-    sub: 'First-time site assessment',
-  },
-  {
-    value: 'non_compliant_follow_up',
-    label: 'Non-Compliant Follow-Up',
-    sub: 'Revisit after corrective action',
-  },
-]
+const ISSUE_TYPES: { value: IssueType; label: string; sub: string }[] =
+  REPORT_TYPE_ORDER.map((value) => ({
+    value,
+    label: REPORT_TYPE_CONFIG[value].label,
+    sub:   REPORT_TYPE_CONFIG[value].description,
+  }))
 
 // ─── GPS capture ──────────────────────────────────────────────
 
@@ -330,7 +326,7 @@ export default function NewInspection() {
         <section>
           <h2 className="text-slate-400 text-xs font-semibold uppercase tracking-widest mb-3 flex items-center gap-2">
             <span className="w-5 h-5 rounded-md bg-brand-orange/20 flex items-center justify-center text-brand-orange text-[10px] font-bold">1</span>
-            Issue Type
+            Report Type
           </h2>
           <div className="space-y-2">
             {ISSUE_TYPES.map(({ value, label, sub }) => (
@@ -368,6 +364,17 @@ export default function NewInspection() {
               </label>
             ))}
           </div>
+
+          {/* Proposals contain nothing installed — make that explicit up front */}
+          {REPORT_TYPE_CONFIG[selectedIssueType]?.isProposal && (
+            <div className="mt-3 flex items-start gap-3 p-3 rounded-xl bg-status-proposed-bg/10 border border-status-proposed/30">
+              <AlertCircle size={15} className="text-status-proposed mt-0.5 shrink-0" />
+              <p className="text-status-proposed text-xs leading-relaxed">
+                Items added to this report are recorded as <strong>Proposed</strong>, not compliant —
+                nothing has been installed or certified yet.
+              </p>
+            </div>
+          )}
         </section>
 
         {/* ── SECTION: Site Details ─────────────────────────── */}

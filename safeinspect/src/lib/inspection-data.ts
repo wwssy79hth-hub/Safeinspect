@@ -416,6 +416,14 @@ export const ASSET_STATUS_CONFIG = {
     dot:    'bg-status-recommendation',
     ring:   'ring-status-recommendation/30',
   },
+  proposed: {
+    label:  'Proposed',
+    color:  'text-status-proposed',
+    bg:     'bg-status-proposed-bg',
+    border: 'border-status-proposed/40',
+    dot:    'bg-status-proposed',
+    ring:   'ring-status-proposed/30',
+  },
   'n/a': {
     label:  'N/A',
     color:  'text-status-na',

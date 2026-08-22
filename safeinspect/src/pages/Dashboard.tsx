@@ -4,7 +4,7 @@ import {
   Plus, QrCode, LayoutTemplate, ClipboardCheck,
   TrendingUp, AlertTriangle, Clock, ArrowRight,
   CheckCircle2, XCircle, AlertCircle, FileText,
-  ChevronRight, MapPin, Calendar,
+  ChevronRight, MapPin, Calendar, PencilRuler,
 } from 'lucide-react'
 import { format, parseISO } from 'date-fns'
 import { cn } from '@/lib/utils'
@@ -29,6 +29,10 @@ const SITE_STATUS: Record<
   partially_compliant: {
     label: 'Partial', icon: AlertCircle,
     color: 'text-status-recommendation', bg: 'bg-status-recommendation-bg', border: 'border-status-recommendation/30',
+  },
+  proposed: {
+    label: 'Proposed', icon: PencilRuler,
+    color: 'text-status-proposed', bg: 'bg-status-proposed-bg', border: 'border-status-proposed/30',
   },
 }
 
@@ -104,6 +108,7 @@ function InspectionCard({ inspection, onClick }: { inspection: Inspection; onCli
         inspection.overall_status === 'compliant' ? 'bg-status-compliant' :
         inspection.overall_status === 'non_compliant' ? 'bg-status-noncompliant' :
         inspection.overall_status === 'partially_compliant' ? 'bg-status-recommendation' :
+        inspection.overall_status === 'proposed' ? 'bg-status-proposed' :
         'bg-surface-border'
       )} />
 
