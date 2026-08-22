@@ -20,7 +20,7 @@ import {
   type PlanFeature, type PlanPoint, type Profile, type SitePlan,
 } from '@/types/database'
 import {
-  POINT_SYMBOLS, LINE_SYMBOLS, STATUS_COLORS, LINE_CATEGORIES,
+  LINE_SYMBOLS, STATUS_COLORS,
 } from '@/components/inspection/map/symbols'
 import { rangeLabel, groupAnchor, groupLabelOwner } from '@/components/inspection/map/labels'
 
@@ -63,6 +63,8 @@ export interface PlanPageContext {
   certifier: Profile | null
   /** e.g. "RECERTIFICATION", "PROPOSED ANCHOR INSTALLATION" */
   issueTitle: string
+  /** Raster logo (PNG data URL) for the title block; text brand fallback */
+  logoB64?: string | null
 }
 
 // ─── Small drawing helpers ───────────────────────────────────
@@ -100,50 +102,15 @@ function polyPath(doc: jsPDF, pts: { x: number; y: number }[], close: boolean, s
   doc.lines(deltas, pts[0].x, pts[0].y, [1, 1], style, close)
 }
 
-// ─── Point symbol (mirrors map/symbols.tsx shapes) ───────────
+// ─── Point marker (matches the app's pin style) ──────────────
+// A status-coloured dot with a white ring — same look as the
+// on-screen map, so screen and print read identically.
 
-function drawPointSymbol(doc: jsPDF, category: AssetCategory, cx: number, cy: number, s: number) {
-  const style = POINT_SYMBOLS[category]
-  const fill = hexToRgb(style.fill)
-  const stroke = hexToRgb(style.stroke)
-  setFill(doc, fill)
-  setDraw(doc, stroke)
-  doc.setLineWidth(s * 0.22)
-
-  switch (style.kind) {
-    case 'circle':
-      doc.circle(cx, cy, s, 'FD')
-      break
-    case 'crossCircle':
-      doc.circle(cx, cy, s, 'FD')
-      doc.line(cx - s * 0.6, cy - s * 0.6, cx + s * 0.6, cy + s * 0.6)
-      doc.line(cx - s * 0.6, cy + s * 0.6, cx + s * 0.6, cy - s * 0.6)
-      break
-    case 'square':
-      doc.rect(cx - s, cy - s, s * 2, s * 2, 'FD')
-      break
-    case 'diamond':
-      polyPath(doc, [
-        { x: cx, y: cy - s * 1.3 },
-        { x: cx + s * 1.3, y: cy },
-        { x: cx, y: cy + s * 1.3 },
-        { x: cx - s * 1.3, y: cy },
-      ], true, 'FD')
-      break
-    case 'ladder':
-      doc.rect(cx - s * 0.8, cy - s, s * 1.6, s * 2, 'FD')
-      for (const f of [-0.4, 0, 0.4]) {
-        doc.line(cx - s * 0.8, cy + s * f, cx + s * 0.8, cy + s * f)
-      }
-      break
-    case 'hatchRect':
-      doc.rect(cx - s, cy - s * 0.7, s * 2, s * 1.4, 'FD')
-      doc.setLineWidth(s * 0.15)
-      for (const f of [-0.5, 0.1, 0.7]) {
-        doc.line(cx + s * f - s * 0.5, cy + s * 0.7, cx + s * f + s * 0.2, cy - s * 0.7)
-      }
-      break
-  }
+function drawPinDot(doc: jsPDF, status: AssetStatus, cx: number, cy: number, s: number) {
+  setFill(doc, hexToRgb(STATUS_COLORS[status].bg))
+  setDraw(doc, WHITE)
+  doc.setLineWidth(s * 0.2)
+  doc.circle(cx, cy, s * 0.6, 'FD')
 }
 
 // ─── Line feature (static lines, guardrails, walkways) ───────
@@ -296,7 +263,7 @@ export function drawPlanLayoutPage(
     if (f.geometry.length === 0) continue
     if (f.geometry_type === 'point') {
       const p = px(f.geometry[0])
-      drawPointSymbol(doc, f.category, p.x, p.y, s)
+      drawPinDot(doc, f.status, p.x, p.y, s)
     }
   }
 
@@ -334,8 +301,10 @@ export function drawPlanLayoutPage(
   for (const f of features) {
     counts.set(f.category, (counts.get(f.category) ?? 0) + 1)
   }
+  // The live enum can carry categories newer than the frontend type
+  // union — fall back to the raw code rather than "undefined"
   const legendRows = [...counts.entries()]
-    .map(([cat, n]) => ({ label: ASSET_CATEGORY_LABELS[cat], n }))
+    .map(([cat, n]) => ({ label: ASSET_CATEGORY_LABELS[cat] ?? String(cat), n }))
     .sort((a, b) => a.label.localeCompare(b.label))
 
   if (legendRows.length > 0) {
@@ -360,14 +329,13 @@ export function drawPlanLayoutPage(
     })
   }
 
-  // ── Icon legend (bottom-left, categories present) ─────────
-  const present = [...counts.keys()].sort()
-  if (present.length > 0) {
-    const cols = 2
-    const rows = Math.ceil(present.length / cols)
+  // ── Status legend (bottom-left, matches the app's map key) ─
+  const statusesPresent = (Object.keys(STATUS_COLORS) as AssetStatus[])
+    .filter((st) => features.some((f) => f.status === st))
+  if (statusesPresent.length > 0) {
     const rowH = 4.4
-    const bw = 76
-    const bh = rows * rowH + 6.5
+    const bw = 44
+    const bh = statusesPresent.length * rowH + 6.5
     const bx = mapX + 2
     const by = mapY + mapH - bh - 2
 
@@ -375,15 +343,18 @@ export function drawPlanLayoutPage(
     setDraw(doc, SLATE900)
     doc.setLineWidth(0.25)
     withOpacity(doc, 0.93, () => doc.rect(bx, by, bw, bh, 'FD'))
-    text(doc, 'ICON LEGEND', bx + bw / 2, by + 3.4, { size: 6, bold: true, align: 'center' })
-    present.forEach((cat, i) => {
-      const col = Math.floor(i / rows)
-      const row = i % rows
-      const x = bx + 3 + col * (bw / cols)
-      const y = by + 6.5 + row * rowH
-      drawPointSymbol(doc, cat, x + 1.4, y + 1.2, 1.4)
-      text(doc, cat, x + 4.5, y + 2.2, { size: 5, bold: true, mono: true, color: NAVY })
-      text(doc, ASSET_CATEGORY_LABELS[cat].slice(0, 24), x + 12.5, y + 2.2, { size: 5, color: SLATE700 })
+    text(doc, 'STATUS', bx + bw / 2, by + 3.4, { size: 6, bold: true, align: 'center' })
+    statusesPresent.forEach((st, i) => {
+      const y = by + 6.5 + i * rowH
+      const c = STATUS_COLORS[st]
+      setFill(doc, hexToRgb(c.bg))
+      setDraw(doc, WHITE)
+      doc.setLineWidth(0.3)
+      doc.circle(bx + 4, y + 1.2, 1.3, 'FD')
+      text(doc, c.label, bx + 7.5, y + 2.2,
+        { size: 5.5, color: SLATE700 })
+      text(doc, String(features.filter((f) => f.status === st).length), bx + bw - 2, y + 2.2,
+        { size: 5.5, color: SLATE700, align: 'right' })
     })
   }
 
@@ -454,8 +425,16 @@ function drawTitleBlock(
   doc.text(addr.slice(0, 4), cols[4] + pad, y + 9)
 
   // BRAND + drawing scaled
-  text(doc, 'Abseal', (cols[5] + cols[6]) / 2, y + 9, { size: 11, bold: true, color: NAVY, align: 'center' })
-  text(doc, 'HEIGHT SAFETY', (cols[5] + cols[6]) / 2, y + 13, { size: 5, color: SLATE500, align: 'center' })
+  const brandCx = (cols[5] + cols[6]) / 2
+  if (ctx.logoB64) {
+    const logoS = 9
+    doc.addImage(ctx.logoB64, 'PNG', brandCx - logoS / 2 - 11, y + 3, logoS, logoS, undefined, 'FAST')
+    text(doc, 'SafeInspect', brandCx + 5, y + 8.8, { size: 9, bold: true, color: NAVY, align: 'center' })
+    text(doc, 'HEIGHT SAFETY INSPECTIONS', brandCx, y + 13.5, { size: 4.4, color: SLATE500, align: 'center' })
+  } else {
+    text(doc, 'SafeInspect', brandCx, y + 9, { size: 11, bold: true, color: NAVY, align: 'center' })
+    text(doc, 'HEIGHT SAFETY INSPECTIONS', brandCx, y + 13, { size: 5, color: SLATE500, align: 'center' })
+  }
   const ds = layout.plan.drawing_scaled || inspection.drawing_scaled
   text(doc, 'DRAWING SCALED', cols[5] + pad, y + 19.5, { size: 5, bold: true, color: SLATE500 })
   setDraw(doc, SLATE900)

@@ -1012,6 +1012,37 @@ function drawProposedScheduleSummary(d: PDFDrawer, data: ReportData) {
   d.y += 20
 }
 
+// ─── App logo for the drafting title block ───────────────────
+// jsPDF embeds rasters only, so the SVG mark is drawn to a canvas.
+
+async function loadLogoB64(): Promise<string | null> {
+  try {
+    const res = await fetch('/favicon.svg')
+    if (!res.ok) return null
+    const svg = await res.text()
+    const url = URL.createObjectURL(new Blob([svg], { type: 'image/svg+xml' }))
+    try {
+      const img = new Image()
+      await new Promise<void>((ok, err) => {
+        img.onload = () => ok()
+        img.onerror = () => err(new Error('logo load failed'))
+        img.src = url
+      })
+      const canvas = document.createElement('canvas')
+      canvas.width = 128
+      canvas.height = 128
+      const ctx = canvas.getContext('2d')
+      if (!ctx) return null
+      ctx.drawImage(img, 0, 0, 128, 128)
+      return canvas.toDataURL('image/png')
+    } finally {
+      URL.revokeObjectURL(url)
+    }
+  } catch {
+    return null
+  }
+}
+
 // ─── Site Layout page ─────────────────────────────────────────
 
 async function drawSiteLayoutPage(d: PDFDrawer, data: ReportData) {
@@ -1020,11 +1051,13 @@ async function drawSiteLayoutPage(d: PDFDrawer, data: ReportData) {
   // icon legend and title block included on the page itself).
   const drawablePlans = data.planLayouts.filter((p) => p.imageB64)
   if (drawablePlans.length > 0) {
+    const logoB64 = await loadLogoB64()
     for (const layout of drawablePlans) {
       drawPlanLayoutPage(d.doc, layout, {
         inspection: data.inspection,
         certifier: data.certifier,
         issueTitle: data.reportType.label.toUpperCase(),
+        logoB64,
       })
     }
     return
