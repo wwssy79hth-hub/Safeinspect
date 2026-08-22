@@ -1219,7 +1219,7 @@ export async function generateAndUploadReport(
   inspectionId: string,
   userId: string,
   onProgress?: ProgressCallback
-): Promise<string> {
+): Promise<{ url: string; storagePath: string }> {
   onProgress?.(5, 'Fetching inspection data…')
   const data = await fetchReportData(inspectionId)
 
@@ -1270,5 +1270,5 @@ export async function generateAndUploadReport(
   if (!signedUrl) throw new Error('Report uploaded but could not create a link')
 
   onProgress?.(100, 'Done!')
-  return signedUrl
+  return { url: signedUrl, storagePath }
 }

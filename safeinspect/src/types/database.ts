@@ -54,6 +54,8 @@ export type ServiceCondition = 'standard' | 'harsh'
 /** Durable registry asset lifecycle (distinct from per-visit AssetStatus) */
 export type RegistryAssetStatus = 'active' | 'do_not_use' | 'removed'
 
+export type AlertKind = 'recert_due' | 'recert_overdue' | 'certificate_expiring'
+
 export type TestMethod =
   | 'proof_load'
   | 'documentation_review'
@@ -337,6 +339,67 @@ export interface Database {
         Relationships: []
       }
 
+      certificates: {
+        Row: {
+          id: string
+          certificate_number: string
+          inspection_id: string
+          site_id: string | null
+          issue_type: IssueType
+          overall_status: OverallSiteStatus | null
+          issued_by: string
+          issued_at: string
+          expires_on: string | null
+          standard_line: string
+          document_path: string | null
+          asset_count: number
+          compliant_count: number
+          revoked_at: string | null
+          revoked_reason: string | null
+          revoked_by: string | null
+        }
+        Insert: never   // issue_certificate() RPC only
+        Update: never   // append-only; revoke_certificate() RPC only
+        Relationships: []
+      }
+
+      alerts: {
+        Row: {
+          id: string
+          kind: AlertKind
+          asset_id: string | null
+          site_id: string | null
+          certificate_id: string | null
+          due_on: string
+          title: string
+          detail: string | null
+          created_at: string
+          resolved_at: string | null
+        }
+        Insert: never   // raised by sweep_due_date_alerts() only
+        Update: never
+        Relationships: []
+      }
+
+      alert_recipients: {
+        Row: {
+          alert_id: string
+          user_id: string
+          acknowledged_at: string | null
+        }
+        Insert: never
+        Update: never   // acknowledge_alert() RPC only
+        Relationships: [
+          {
+            foreignKeyName: 'alert_recipients_alert_id_fkey'
+            columns: ['alert_id']
+            isOneToOne: false
+            referencedRelation: 'alerts'
+            referencedColumns: ['id']
+          },
+        ]
+      }
+
       standards: {
         Row: {
           code: string
@@ -396,6 +459,22 @@ export interface Database {
     }
 
     Functions: {
+      issue_certificate: {
+        Args: { p_inspection_id: string; p_document_path?: string | null }
+        Returns: Database['public']['Tables']['certificates']['Row']
+      }
+      revoke_certificate: {
+        Args: { p_certificate_id: string; p_reason: string }
+        Returns: undefined
+      }
+      acknowledge_alert: {
+        Args: { p_alert_id: string }
+        Returns: undefined
+      }
+      sweep_due_date_alerts: {
+        Args: { p_lead_days?: number }
+        Returns: undefined
+      }
       applicable_rule: {
         Args: { p_class: AssetCategory; p_condition?: string; p_on?: string }
         Returns: Database['public']['Tables']['inspection_rules']['Row'] | null
@@ -435,6 +514,8 @@ export type Inspection = Database['public']['Tables']['inspections']['Row']
 export type InspectionAsset = Database['public']['Tables']['inspection_assets']['Row']
 export type AssetPhoto = Database['public']['Tables']['asset_photos']['Row']
 export type InspectionSummaryRow = Database['public']['Tables']['inspection_summary']['Row']
+export type Certificate = Database['public']['Tables']['certificates']['Row']
+export type AlertRow = Database['public']['Tables']['alerts']['Row']
 export type ClientRow = Database['public']['Tables']['clients']['Row']
 export type SiteRow = Database['public']['Tables']['sites']['Row']
 export type RegistryAsset = Database['public']['Tables']['assets']['Row']

@@ -23,6 +23,8 @@ import {
   type ProgressCallback,
 } from '@/lib/reportGenerator'
 import { SignatureSection } from '@/components/inspection/SignaturePad'
+import { issueCertificate, fetchActiveCertificate } from '@/lib/certificates'
+import type { Certificate } from '@/types/database'
 
 // ─── Tab types ────────────────────────────────────────────────
 
@@ -304,12 +306,43 @@ export default function InspectionDetail() {
     }
 
     try {
-      const url = await generateAndUploadReport(id, user.id, progressCb)
+      const { url } = await generateAndUploadReport(id, user.id, progressCb)
       setReportCloudUrl(url)
     } catch (err) {
       setReportError(err instanceof Error ? err.message : 'Upload failed')
     } finally {
       setReportGenerating(false)
+    }
+  }
+
+  // ── Certificate (extraction item 5) ─────────────────────────
+  // Generate + upload the PDF, then issue the certificate record
+  // through the server-side RPC (evidence gate enforced there).
+  const [certificate, setCertificate] = useState<Certificate | null>(null)
+  const [certIssuing, setCertIssuing] = useState(false)
+  const [certError, setCertError] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (id) fetchActiveCertificate(id).then(setCertificate)
+  }, [id, activeInspection?.inspection_status])
+
+  const handleIssueCertificate = async () => {
+    if (!id || !user?.id) return
+    setCertIssuing(true)
+    setCertError(null)
+    try {
+      const { storagePath, url } = await generateAndUploadReport(id, user.id, (pct, label) => {
+        setReportProgress(pct)
+        setReportProgressLabel(label)
+      })
+      setReportCloudUrl(url)
+      const cert = await issueCertificate(id, storagePath)
+      setCertificate(cert)
+      await loadInspection(id)  // status is now 'issued'
+    } catch (err) {
+      setCertError(err instanceof Error ? err.message : 'Certificate issue failed')
+    } finally {
+      setCertIssuing(false)
     }
   }
 
@@ -631,6 +664,66 @@ export default function InspectionDetail() {
                   <CloudUpload size={16} className="text-brand-orange" />
                   Save Report to Cloud
                 </button>
+              )}
+
+              {/* ── Certificate ─────────────────────────────── */}
+              {certificate ? (
+                <div className="p-4 rounded-2xl bg-status-compliant-bg/10 border border-status-compliant/40">
+                  <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 rounded-xl bg-status-compliant-bg flex items-center justify-center shrink-0">
+                      <CheckCircle2 size={20} className="text-status-compliant" />
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <p className="text-status-compliant font-display font-bold text-base">
+                        Certificate {certificate.certificate_number}
+                      </p>
+                      <p className="text-slate-400 text-xs mt-0.5">
+                        Issued {format(parseISO(certificate.issued_at), 'd MMM yyyy')}
+                        {certificate.expires_on &&
+                          <> · expires <span className="text-white">{format(parseISO(certificate.expires_on), 'd MMM yyyy')}</span></>}
+                      </p>
+                      {certificate.standard_line && (
+                        <p className="text-slate-500 text-[11px] mt-0.5 truncate">{certificate.standard_line}</p>
+                      )}
+                    </div>
+                  </div>
+                  <p className="text-slate-500 text-[11px] mt-2.5">
+                    Records for this inspection are now frozen. Corrections require an admin to revoke and reissue.
+                  </p>
+                </div>
+              ) : (
+                activeInspection.inspection_status === 'completed' &&
+                !reportType.isProposal && (
+                  <div className="space-y-2">
+                    {certError && (
+                      <div className="flex items-start gap-2 p-3 rounded-xl bg-status-noncompliant-bg border border-status-noncompliant/30">
+                        <AlertTriangle size={15} className="text-status-noncompliant shrink-0 mt-0.5" />
+                        <div className="flex-1">
+                          <p className="text-status-noncompliant text-sm font-medium">Certificate not issued</p>
+                          <p className="text-status-noncompliant/80 text-xs mt-0.5">{certError}</p>
+                        </div>
+                        <button onClick={() => setCertError(null)} className="text-status-noncompliant/60 hover:text-status-noncompliant">
+                          <XCircle size={14} />
+                        </button>
+                      </div>
+                    )}
+                    <button
+                      onClick={handleIssueCertificate}
+                      disabled={certIssuing || reportGenerating || !activeInspection.certifier_signature_url}
+                      className="w-full h-12 rounded-xl font-display font-bold text-base transition-all flex items-center justify-center gap-2 bg-brand-blue text-white border border-brand-light/30 hover:border-brand-light/60 active:scale-[0.98] disabled:opacity-50"
+                    >
+                      {certIssuing
+                        ? <Loader2 size={18} className="animate-spin" />
+                        : <FileText size={18} className="text-brand-orange" />}
+                      {certIssuing ? 'Issuing certificate…' : 'Issue Certificate'}
+                    </button>
+                    {!activeInspection.certifier_signature_url && (
+                      <p className="text-center text-slate-600 text-xs">
+                        Certifier signature required before a certificate can issue.
+                      </p>
+                    )}
+                  </div>
+                )
               )}
 
               {assets.length === 0 && (
