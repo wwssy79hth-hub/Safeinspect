@@ -295,13 +295,13 @@ export default function NewInspection() {
           </button>
           <div className="flex-1">
             <h1 className="font-display text-base font-bold text-white">New Inspection</h1>
-            <p className="text-slate-500 text-xs">AS1891.4:2009 · AS1657-2018 · AS5532-2013</p>
+            <p className="text-slate-500 text-xs">AS/NZS 1891.4:2025 · AS 1657-2018 · AS/NZS 5532:2013</p>
           </div>
         </div>
 
         {/* Standards badge bar */}
         <div className="px-4 pb-3 flex gap-2 overflow-x-auto scrollbar-none">
-          {['AS1891.4:2009', 'AS1657-2018', 'AS5532-2013'].map((s) => (
+          {['AS/NZS 1891.4:2025', 'AS 1657-2018', 'AS/NZS 5532:2013'].map((s) => (
             <span
               key={s}
               className="shrink-0 text-[10px] font-mono font-medium text-brand-orange bg-brand-orange/10 border border-brand-orange/20 px-2 py-0.5 rounded-md"

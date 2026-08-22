@@ -9,8 +9,10 @@
 
 import jsPDF from 'jspdf'
 import autoTable, { type RowInput } from 'jspdf-autotable'
-import { format, parseISO, addYears } from 'date-fns'
+import { format, parseISO, addMonths } from 'date-fns'
 import { supabase } from '@/lib/supabase'
+import { resolveStorageUrl, resolveStorageUrls } from '@/lib/storageUrls'
+import { loadStandardsData, minIntervalMonthsFor } from '@/lib/standards'
 import { ASSET_CATEGORY_LABELS, ASSET_CATEGORIES } from '@/types/database'
 import {
   reportTypeConfig, displayStatus, isProposalReport,
@@ -217,6 +219,12 @@ interface ReportData {
   signatureB64: string | null
   /** Report-type driven wording + status presentation rules */
   reportType: ReportTypeConfig
+  /**
+   * Tightest inspection interval across the categories present,
+   * from the inspection_rules table (null when unavailable —
+   * falls back to 12 months).
+   */
+  minIntervalMonths: number | null
 }
 
 async function fetchReportData(inspectionId: string): Promise<ReportData> {
@@ -240,32 +248,50 @@ async function fetchReportData(inspectionId: string): Promise<ReportData> {
     .eq('inspection_id', inspectionId)
     .order('sort_order')
 
+  // The buckets are private — batch-sign photo paths for embedding
+  const photoRows = photos ?? []
+  const signedPhotoUrls = await resolveStorageUrls(
+    'inspection-photos',
+    photoRows.map((p) => p.storage_path)
+  )
+
   const photosByAsset: Record<string, Array<{ url: string; caption: string | null }>> = {}
-  for (const p of photos ?? []) {
+  for (const p of photoRows) {
+    const url = signedPhotoUrls.get(p.storage_path) ?? p.public_url
+    if (!url) continue
     if (!photosByAsset[p.asset_id]) photosByAsset[p.asset_id] = []
-    if (p.public_url) photosByAsset[p.asset_id].push({ url: p.public_url, caption: p.caption })
+    photosByAsset[p.asset_id].push({ url, caption: p.caption })
   }
 
   // Load aerial map
   let aerialMapB64: string | null = null
   if (inspection.aerial_map_url) {
-    aerialMapB64 = await loadImageAsBase64(inspection.aerial_map_url)
+    const url = await resolveStorageUrl('aerial-maps', inspection.aerial_map_url)
+    if (url) aerialMapB64 = await loadImageAsBase64(url)
   }
 
   // Load certifier signature
   let signatureB64: string | null = null
   if (inspection.certifier_signature_url) {
-    signatureB64 = await loadImageAsBase64(inspection.certifier_signature_url)
+    const url = await resolveStorageUrl('signatures', inspection.certifier_signature_url)
+    if (url) signatureB64 = await loadImageAsBase64(url)
   }
+
+  // Interval from the standards rules for the categories present
+  const assets = assetsRes.data ?? []
+  const categories = [...new Set(assets.map((a) => a.category))]
+  const standardsData = await loadStandardsData()
+  const minIntervalMonths = minIntervalMonthsFor(standardsData, categories)
 
   return {
     inspection,
     certifier: certifier ?? null,
-    assets: assetsRes.data ?? [],
+    assets,
     photosByAsset,
     aerialMapB64,
     signatureB64,
     reportType: reportTypeConfig(inspection.issue_type),
+    minIntervalMonths,
   }
 }
 
@@ -350,7 +376,7 @@ function drawCoverPage(d: PDFDrawer, data: ReportData) {
   d.text(reportType.documentTitle, M.l + 8, d.y + 32, { size: 13, bold: true, color: C.orange })
 
   // Standards line
-  d.text('AS1891.4:2009  │  AS1657-2018  │  AS5532-2013',
+  d.text('AS/NZS 1891.4:2025  │  AS 1657-2018  │  AS/NZS 5532:2013',
     M.l + 8, d.y + 41, { size: 7, color: [180, 200, 220] })
 
   d.y += 52
@@ -1017,11 +1043,15 @@ function drawSignOffPage(d: PDFDrawer, data: ReportData) {
   const { inspection, reportType } = data
   // A proposal has no installed system to schedule a recertification for —
   // the clock only starts once the proposed items are installed.
+  // Interval comes from the inspection_rules table (tightest rule
+  // across the categories present); 12 months is the fallback when
+  // the standards data is unavailable.
+  const intervalMonths = data.minIntervalMonths ?? 12
   const nextDue = reportType.isProposal
-    ? '12 months from installation'
+    ? `${intervalMonths} months from installation`
     : inspection.next_recertification_due
       ? format(parseISO(inspection.next_recertification_due), 'dd/MM/yyyy')
-      : format(addYears(parseISO(inspection.date_of_inspection), 1), 'dd/MM/yyyy')
+      : format(addMonths(parseISO(inspection.date_of_inspection), intervalMonths), 'dd/MM/yyyy')
 
   drawSectionHeading(d, reportType.isProposal ? 'Prepared By' : 'Inspector Sign-Off')
 
@@ -1224,7 +1254,7 @@ export async function generateAndUploadReport(
   const datePart = format(parseISO(data.inspection.date_of_inspection), 'yyyyMMdd')
   const sitePart = data.inspection.site_name.replace(/[^a-z0-9]/gi, '_').slice(0, 30)
   const filename = `Abseal_${data.reportType.filenameStem}_${sitePart}_${datePart}.pdf`
-  const storagePath = `reports/${inspectionId}/${filename}`
+  const storagePath = `${inspectionId}/${filename}`
 
   const blob = doc.output('blob')
 
@@ -1234,10 +1264,11 @@ export async function generateAndUploadReport(
 
   if (error) throw error
 
-  const { data: urlData } = supabase.storage
-    .from('reports')
-    .getPublicUrl(storagePath)
+  // The bucket is private — hand back a signed URL for the
+  // "Open report" link.
+  const signedUrl = await resolveStorageUrl('reports', storagePath)
+  if (!signedUrl) throw new Error('Report uploaded but could not create a link')
 
   onProgress?.(100, 'Done!')
-  return urlData.publicUrl
+  return signedUrl
 }

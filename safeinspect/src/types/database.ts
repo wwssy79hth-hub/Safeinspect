@@ -49,6 +49,14 @@ export type Priority = 1 | 2 | 3
 
 export type UserRole = 'admin' | 'inspector' | 'viewer'
 
+export type ServiceCondition = 'standard' | 'harsh'
+
+export type TestMethod =
+  | 'proof_load'
+  | 'documentation_review'
+  | 'functional_test'
+  | 'visual_inspection'
+
 // ─── Asset Category Codes ─────────────────────────────────────
 
 export type AssetCategory =
@@ -238,6 +246,59 @@ export interface Database {
         Update: Partial<Database['public']['Tables']['inspection_summary']['Row']>
         Relationships: []
       }
+
+      standards: {
+        Row: {
+          code: string
+          edition: string
+          title: string
+          effective_from: string
+          superseded_from: string | null
+        }
+        Insert: Insertable<
+          Database['public']['Tables']['standards']['Row'],
+          'code' | 'edition' | 'title' | 'effective_from'
+        >
+        Update: Partial<Database['public']['Tables']['standards']['Row']>
+        Relationships: []
+      }
+
+      asset_classes: {
+        Row: {
+          code: AssetCategory
+          name: string
+          standard_code: string
+          is_installed: boolean
+        }
+        Insert: Insertable<
+          Database['public']['Tables']['asset_classes']['Row'],
+          'code' | 'name' | 'standard_code'
+        >
+        Update: Partial<Database['public']['Tables']['asset_classes']['Row']>
+        Relationships: []
+      }
+
+      inspection_rules: {
+        Row: {
+          asset_class_code: AssetCategory
+          standard_code: string
+          standard_edition: string
+          service_condition: ServiceCondition
+          interval_months: number
+          test_method: TestMethod
+          effective_from: string
+          source_note: string | null
+          verified_by: string | null
+          verified_at: string | null
+        }
+        Insert: Insertable<
+          Database['public']['Tables']['inspection_rules']['Row'],
+          'asset_class_code' | 'standard_code' | 'standard_edition'
+          | 'interval_months' | 'test_method' | 'effective_from'
+        >
+        Update: Partial<Database['public']['Tables']['inspection_rules']['Row']>
+        Relationships: []
+      }
     }
 
     Views: {
@@ -245,6 +306,14 @@ export interface Database {
     }
 
     Functions: {
+      applicable_rule: {
+        Args: { p_class: AssetCategory; p_condition?: string; p_on?: string }
+        Returns: Database['public']['Tables']['inspection_rules']['Row'] | null
+      }
+      next_due_date: {
+        Args: { p_class: AssetCategory; p_condition: string; p_last_pass: string }
+        Returns: string | null
+      }
       get_inspection_summary: {
         Args: { p_inspection_id: string }
         Returns: {
@@ -276,3 +345,6 @@ export type Inspection = Database['public']['Tables']['inspections']['Row']
 export type InspectionAsset = Database['public']['Tables']['inspection_assets']['Row']
 export type AssetPhoto = Database['public']['Tables']['asset_photos']['Row']
 export type InspectionSummaryRow = Database['public']['Tables']['inspection_summary']['Row']
+export type StandardRow = Database['public']['Tables']['standards']['Row']
+export type AssetClassRow = Database['public']['Tables']['asset_classes']['Row']
+export type InspectionRuleRow = Database['public']['Tables']['inspection_rules']['Row']

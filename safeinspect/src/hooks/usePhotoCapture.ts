@@ -1,5 +1,6 @@
 import { useState, useRef, useCallback } from 'react'
 import { supabase } from '@/lib/supabase'
+import { resolveStorageUrl } from '@/lib/storageUrls'
 
 export interface PhotoEntry {
   id: string            // temp UUID before upload, then asset_photo.id
@@ -57,7 +58,7 @@ export function usePhotoCapture({
 
     try {
       const ext = photo.file.name.split('.').pop() ?? 'jpg'
-      const path = `inspection-photos/${inspectionId}/${resolvedAssetId}/${photoId}.${ext}`
+      const path = `${inspectionId}/${resolvedAssetId}/${photoId}.${ext}`
 
       const { error: uploadErr } = await supabase.storage
         .from('inspection-photos')
@@ -65,25 +66,22 @@ export function usePhotoCapture({
 
       if (uploadErr) throw uploadErr
 
-      const { data: urlData } = supabase.storage
-        .from('inspection-photos')
-        .getPublicUrl(path)
-
-      // Write to asset_photos table
+      // Buckets are private: persist the path, sign URLs at read time
       await supabase.from('asset_photos').insert({
         inspection_id: inspectionId,
         asset_id: resolvedAssetId,
         storage_path: path,
-        public_url: urlData.publicUrl,
         caption: photo.caption || null,
         sort_order: photos.indexOf(photo),
         uploaded_by: userId,
       })
 
+      const signedUrl = await resolveStorageUrl('inspection-photos', path)
+
       setPhotos((prev) =>
         prev.map((p) =>
           p.id === photoId
-            ? { ...p, uploading: false, storagePath: path, publicUrl: urlData.publicUrl, file: null }
+            ? { ...p, uploading: false, storagePath: path, publicUrl: signedUrl, file: null }
             : p
         )
       )

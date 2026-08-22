@@ -523,7 +523,7 @@ export default function InspectionDetail() {
                   {isProposal ? 'Proposed Item Summary' : 'Inspection Item Summary'}
                 </h3>
                 <p className="text-slate-500 text-xs mt-0.5">
-                  Per AS1891.4:2009 Section 9 · {format(parseISO(activeInspection.date_of_inspection), 'd MMM yyyy')}
+                  Per AS/NZS 1891.4:2025 · {format(parseISO(activeInspection.date_of_inspection), 'd MMM yyyy')}
                 </p>
               </div>
               <InspectionSummaryTable inspectionId={activeInspection.id} />

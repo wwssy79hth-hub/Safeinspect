@@ -1,7 +1,9 @@
 import { create } from 'zustand'
 import { devtools, persist } from 'zustand/middleware'
 import { supabase } from '@/lib/supabase'
+import { resolveStorageUrl } from '@/lib/storageUrls'
 import { defaultAssetStatusFor, isProposalReport } from '@/lib/reportTypes'
+import { DEFAULT_STANDARD } from '@/lib/inspection-data'
 import type {
   Inspection,
   InspectionAsset,
@@ -315,7 +317,7 @@ export const useInspectionStore = create<InspectionState>()(
             const payload = {
               ...asset,
               sort_order: asset.sort_order ?? sortOrder,
-              standard_referenced: asset.standard_referenced ?? 'AS/NZS 1891.4:2009',
+              standard_referenced: asset.standard_referenced ?? DEFAULT_STANDARD,
               photo_refs: asset.photo_refs ?? [],
             }
             const { data, error } = await supabase
@@ -398,10 +400,14 @@ export const useInspectionStore = create<InspectionState>()(
               } catch { /* ignore corrupt */ }
             }
 
+            // Stored value is a storage path (or a legacy URL) —
+            // resolve to a signed URL for display.
+            const imageUrl = await resolveStorageUrl('aerial-maps', data.aerial_map_url)
+
             set({
               sitePlan: {
-                image_url: data.aerial_map_url,
-                image_path: null,
+                image_url: imageUrl,
+                image_path: data.aerial_map_url,
                 markers,
                 drawing_scaled: data.drawing_scaled ?? false,
               },
@@ -417,31 +423,29 @@ export const useInspectionStore = create<InspectionState>()(
           set({ saving: true, error: null })
           try {
             const ext = file.name.split('.').pop() ?? 'jpg'
-            const path = `aerial-maps/${inspectionId}/site-plan.${ext}`
+            const path = `${inspectionId}/site-plan.${ext}`
             const { error: uploadErr } = await supabase.storage
               .from('aerial-maps')
               .upload(path, file, { upsert: true, contentType: file.type })
             if (uploadErr) throw uploadErr
 
-            const { data: urlData } = supabase.storage
-              .from('aerial-maps')
-              .getPublicUrl(path)
-
-            const publicUrl = urlData.publicUrl
-
+            // The bucket is private: persist the path, display via a
+            // signed URL resolved at read time.
             await supabase
               .from('inspections')
-              .update({ aerial_map_url: publicUrl })
+              .update({ aerial_map_url: path })
               .eq('id', inspectionId)
 
+            const displayUrl = (await resolveStorageUrl('aerial-maps', path)) ?? ''
+
             set((s) => ({
-              sitePlan: { ...s.sitePlan, image_url: publicUrl, image_path: path },
+              sitePlan: { ...s.sitePlan, image_url: displayUrl, image_path: path },
               activeInspection: s.activeInspection
-                ? { ...s.activeInspection, aerial_map_url: publicUrl }
+                ? { ...s.activeInspection, aerial_map_url: path }
                 : null,
             }))
 
-            return publicUrl
+            return displayUrl
           } catch (err) {
             const msg = err instanceof Error ? err.message : 'Failed to upload site plan'
             set({ error: msg })

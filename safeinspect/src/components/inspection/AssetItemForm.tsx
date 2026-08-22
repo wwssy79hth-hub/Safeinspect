@@ -1,5 +1,5 @@
 import {
-  useState, useEffect, useCallback, useRef,
+  useState, useEffect, useCallback, useMemo, useRef,
 } from 'react'
 import {
   Camera, ImagePlus, X, MapPin, CheckCircle2, XCircle,
@@ -11,11 +11,11 @@ import { cn } from '@/lib/utils'
 import { useAuthStore } from '@/store/auth.store'
 import { useInspectionStore } from '@/store/inspection.store'
 import { allowedAssetStatusesFor, defaultAssetStatusFor } from '@/lib/reportTypes'
+import { useStandards, standardOptionsFor } from '@/lib/standards'
 import { usePhotoCapture } from '@/hooks/usePhotoCapture'
 import {
   QUICK_FILL_OPTIONS,
   INSPECTION_CHECKLIST,
-  CATEGORY_STANDARDS,
   PRIORITY_CONFIG,
   ASSET_STATUS_CONFIG,
   getDefaultStandard,
@@ -306,6 +306,18 @@ export function AssetItemForm({
   const defaultStatus  = defaultAssetStatusFor(issueType)
   const allowedStatuses = allowedAssetStatusesFor(issueType)
   const statusOptions  = STATUS_OPTIONS.filter((o) => allowedStatuses.includes(o.value))
+
+  // Referenced-standard options come from the standards tables when
+  // available (current editions first), with static fallbacks.
+  const standardsData = useStandards()
+  const standardOptions = useMemo(() => {
+    const opts = standardOptionsFor(standardsData, category)
+    for (const s of ['AS/NZS 1891.1:2007', 'AS/NZS 1891.2:2001', 'AS 1657-2018',
+                     'AS 5532-2013', 'AS/NZS 4488.2:1997', 'AS/NZS 4994.1:2009', 'AS 1319-1994']) {
+      if (!opts.includes(s)) opts.push(s)
+    }
+    return opts
+  }, [standardsData, category])
 
   const isNew = !asset
   const [expanded, setExpanded] = useState(defaultExpanded || isNew)
@@ -653,14 +665,13 @@ export function AssetItemForm({
                 onChange={(e) => patch({ standard_referenced: e.target.value })}
                 className="w-full h-11 bg-surface-base border border-surface-border rounded-xl px-3 pr-9 text-white text-sm appearance-none focus:outline-none focus:ring-2 focus:ring-brand-orange/50 hover:border-slate-500 transition-colors"
               >
-                {(CATEGORY_STANDARDS[category] ?? ['AS/NZS 1891.4:2009']).map((s) => (
+                {standardOptions.map((s) => (
                   <option key={s} value={s}>{s}</option>
                 ))}
-                {/* Additional standards not in the default list */}
-                {['AS/NZS 1891.4:2009', 'AS 1657-2018', 'AS 5532-2013', 'AS/NZS 1891.1:2007',
-                  'AS/NZS 1891.2:2001', 'AS/NZS 4488.2:1997', 'AS/NZS 4994.1:2009', 'AS 1319-1994']
-                  .filter((s) => !(CATEGORY_STANDARDS[category] ?? []).includes(s))
-                  .map((s) => <option key={s} value={s}>{s}</option>)}
+                {/* A stored value from an older edition stays selectable */}
+                {form.standard_referenced && !standardOptions.includes(form.standard_referenced) && (
+                  <option value={form.standard_referenced}>{form.standard_referenced}</option>
+                )}
               </select>
               <ChevronDown size={13} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500 pointer-events-none" />
             </div>
