@@ -82,6 +82,8 @@ export type AssetCategory =
   | 'GHK'   // Guardrail Hatch Kit
   | 'SS'    // Safety Signage
   | 'DB'    // Davit Base
+  | 'DA'    // Davit Arm
+  | 'DN'    // Needle Davit
   | 'RR'    // Rigid Rail System
   | 'SPM'   // Skylight Protection Mesh
   | 'OSE'   // Other Safety Equipment
@@ -105,6 +107,8 @@ export const ASSET_CATEGORY_LABELS: Record<AssetCategory, string> = {
   GHK:  'Guardrail Hatch Kit',
   SS:   'Safety Signage',
   DB:   'Davit Base',
+  DA:   'Davit Arm',
+  DN:   'Needle Davit',
   RR:   'Rigid Rail System',
   SPM:  'Skylight Protection Mesh',
   OSE:  'Other Safety Equipment',

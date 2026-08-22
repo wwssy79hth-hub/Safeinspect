@@ -20,7 +20,7 @@ import {
   type PlanFeature, type PlanPoint, type Profile, type SitePlan,
 } from '@/types/database'
 import {
-  LINE_SYMBOLS, STATUS_COLORS,
+  POINT_SYMBOLS, LINE_SYMBOLS, STATUS_COLORS,
 } from '@/components/inspection/map/symbols'
 import { rangeLabel, groupAnchor, groupLabelOwner } from '@/components/inspection/map/labels'
 
@@ -102,15 +102,92 @@ function polyPath(doc: jsPDF, pts: { x: number; y: number }[], close: boolean, s
   doc.lines(deltas, pts[0].x, pts[0].y, [1, 1], style, close)
 }
 
-// ─── Point marker (matches the app's pin style) ──────────────
-// A status-coloured dot with a white ring — same look as the
-// on-screen map, so screen and print read identically.
+// ─── Point symbols (Abseal drawing language) ─────────────────
+// Anchor-point ring dots take the asset's status colour so the
+// drawing carries compliance at a glance; the other glyphs match
+// the company's drafted layouts (DBn davit base, davit arm,
+// needle davit, ladder, hatched platforms …).
 
-function drawPinDot(doc: jsPDF, status: AssetStatus, cx: number, cy: number, s: number) {
-  setFill(doc, hexToRgb(STATUS_COLORS[status].bg))
-  setDraw(doc, WHITE)
-  doc.setLineWidth(s * 0.2)
-  doc.circle(cx, cy, s * 0.6, 'FD')
+function drawPointSymbol(
+  doc: jsPDF, category: AssetCategory, status: AssetStatus,
+  cx: number, cy: number, s: number
+) {
+  const style = POINT_SYMBOLS[category] ?? { kind: 'circle' as const, fill: '#94a3b8', stroke: '#475569' }
+  const fill = hexToRgb(style.fill)
+  const stroke = hexToRgb(style.stroke)
+  const sw = s * 0.22
+  setFill(doc, fill)
+  setDraw(doc, stroke)
+  doc.setLineWidth(sw)
+
+  switch (style.kind) {
+    case 'ringDot': {
+      setDraw(doc, stroke)
+      doc.setLineWidth(sw * 0.8)
+      doc.setLineDashPattern([s * 0.35, s * 0.28], 0)
+      doc.circle(cx, cy, s, 'S')
+      doc.setLineDashPattern([], 0)
+      setFill(doc, hexToRgb(STATUS_COLORS[status].bg))
+      setDraw(doc, WHITE)
+      doc.setLineWidth(sw * 0.6)
+      doc.circle(cx, cy, s * 0.55, 'FD')
+      break
+    }
+    case 'dbCross':
+      setDraw(doc, WHITE)
+      doc.setLineWidth(sw * 0.7)
+      doc.rect(cx - s, cy - s, s * 2, s * 2, 'FD')
+      doc.line(cx - s * 0.55, cy - s * 0.55, cx + s * 0.55, cy + s * 0.55)
+      doc.line(cx - s * 0.55, cy + s * 0.55, cx + s * 0.55, cy - s * 0.55)
+      break
+    case 'davit':
+      setDraw(doc, fill)
+      doc.setLineWidth(sw * 1.3)
+      doc.line(cx - s * 0.9, cy + s, cx - s * 0.9, cy - s)
+      doc.line(cx - s * 0.9, cy - s, cx + s, cy - s)
+      doc.line(cx + s, cy - s, cx + s, cy - s * 0.3)
+      doc.circle(cx - s * 0.9, cy + s, sw, 'F')
+      break
+    case 'needleDavit':
+      setDraw(doc, fill)
+      doc.setLineWidth(sw * 1.3)
+      doc.line(cx - s * 0.9, cy + s, cx - s * 0.9, cy - s * 0.2)
+      doc.line(cx - s * 0.9, cy - s * 0.2, cx + s, cy - s)
+      doc.circle(cx - s * 0.9, cy + s, sw, 'F')
+      break
+    case 'circle':
+      doc.circle(cx, cy, s, 'FD')
+      break
+    case 'crossCircle':
+      doc.circle(cx, cy, s, 'FD')
+      doc.line(cx - s * 0.6, cy - s * 0.6, cx + s * 0.6, cy + s * 0.6)
+      doc.line(cx - s * 0.6, cy + s * 0.6, cx + s * 0.6, cy - s * 0.6)
+      break
+    case 'square':
+      doc.rect(cx - s, cy - s, s * 2, s * 2, 'FD')
+      break
+    case 'diamond':
+      polyPath(doc, [
+        { x: cx, y: cy - s * 1.3 },
+        { x: cx + s * 1.3, y: cy },
+        { x: cx, y: cy + s * 1.3 },
+        { x: cx - s * 1.3, y: cy },
+      ], true, 'FD')
+      break
+    case 'ladder':
+      doc.rect(cx - s * 0.8, cy - s, s * 1.6, s * 2, 'FD')
+      for (const f of [-0.4, 0, 0.4]) {
+        doc.line(cx - s * 0.8, cy + s * f, cx + s * 0.8, cy + s * f)
+      }
+      break
+    case 'hatchRect':
+      doc.rect(cx - s, cy - s * 0.7, s * 2, s * 1.4, 'FD')
+      doc.setLineWidth(s * 0.15)
+      for (const f of [-0.5, 0.1, 0.7]) {
+        doc.line(cx + s * f - s * 0.5, cy + s * 0.7, cx + s * f + s * 0.2, cy - s * 0.7)
+      }
+      break
+  }
 }
 
 // ─── Line feature (static lines, guardrails, walkways) ───────
@@ -263,7 +340,7 @@ export function drawPlanLayoutPage(
     if (f.geometry.length === 0) continue
     if (f.geometry_type === 'point') {
       const p = px(f.geometry[0])
-      drawPinDot(doc, f.status, p.x, p.y, s)
+      drawPointSymbol(doc, f.category, f.status, p.x, p.y, s)
     }
   }
 
@@ -329,13 +406,31 @@ export function drawPlanLayoutPage(
     })
   }
 
-  // ── Status legend (bottom-left, matches the app's map key) ─
-  const statusesPresent = (Object.keys(STATUS_COLORS) as AssetStatus[])
-    .filter((st) => features.some((f) => f.status === st))
-  if (statusesPresent.length > 0) {
-    const rowH = 4.4
-    const bw = 44
-    const bh = statusesPresent.length * rowH + 6.5
+  // ── Icon legend (bottom-left, Abseal drawing language) ────
+  // Davit arm and needle davit share one row ("Davit / Needle
+  // Davit") like the company's drafted legends.
+  const present = [...counts.keys()].sort()
+  const legendEntries: { cats: AssetCategory[]; label: string }[] = []
+  let davitRowDone = false
+  for (const cat of present) {
+    if (cat === 'DA' || cat === 'DN') {
+      // One combined row showing both glyphs, as on the drafted legends
+      if (!davitRowDone) {
+        legendEntries.push({ cats: ['DA', 'DN'] as AssetCategory[], label: 'Davit / Needle Davit' })
+        davitRowDone = true
+      }
+      continue
+    }
+    legendEntries.push({ cats: [cat], label: ASSET_CATEGORY_LABELS[cat] ?? String(cat) })
+  }
+
+  if (legendEntries.length > 0) {
+    const cols = legendEntries.length > 7 ? 2 : 1
+    const rows = Math.ceil(legendEntries.length / cols)
+    const rowH = 4.6
+    const colW = 42
+    const bw = colW * cols + 4
+    const bh = rows * rowH + 7
     const bx = mapX + 2
     const by = mapY + mapH - bh - 2
 
@@ -343,18 +438,17 @@ export function drawPlanLayoutPage(
     setDraw(doc, SLATE900)
     doc.setLineWidth(0.25)
     withOpacity(doc, 0.93, () => doc.rect(bx, by, bw, bh, 'FD'))
-    text(doc, 'STATUS', bx + bw / 2, by + 3.4, { size: 6, bold: true, align: 'center' })
-    statusesPresent.forEach((st, i) => {
-      const y = by + 6.5 + i * rowH
-      const c = STATUS_COLORS[st]
-      setFill(doc, hexToRgb(c.bg))
-      setDraw(doc, WHITE)
-      doc.setLineWidth(0.3)
-      doc.circle(bx + 4, y + 1.2, 1.3, 'FD')
-      text(doc, c.label, bx + 7.5, y + 2.2,
-        { size: 5.5, color: SLATE700 })
-      text(doc, String(features.filter((f) => f.status === st).length), bx + bw - 2, y + 2.2,
-        { size: 5.5, color: SLATE700, align: 'right' })
+    text(doc, 'ICON LEGEND', bx + bw / 2, by + 3.6, { size: 6, bold: true, align: 'center' })
+    legendEntries.forEach((entry, i) => {
+      const col = Math.floor(i / rows)
+      const row = i % rows
+      const x = bx + 3 + col * colW
+      const y = by + 7.5 + row * rowH
+      entry.cats.forEach((cat, k) => {
+        drawPointSymbol(doc, cat, 'compliant', x + 1.6 + k * 4.6, y + 1.1, 1.5)
+      })
+      text(doc, entry.label, x + 4 + (entry.cats.length - 1) * 4.6, y + 2.2,
+        { size: 5.3, color: SLATE700 })
     })
   }
 
@@ -424,16 +518,17 @@ function drawTitleBlock(
   ) as string[]
   doc.text(addr.slice(0, 4), cols[4] + pad, y + 9)
 
-  // BRAND + drawing scaled
+  // BRAND (company logo) + drawing scaled
   const brandCx = (cols[5] + cols[6]) / 2
   if (ctx.logoB64) {
-    const logoS = 9
-    doc.addImage(ctx.logoB64, 'PNG', brandCx - logoS / 2 - 11, y + 3, logoS, logoS, undefined, 'FAST')
-    text(doc, 'SafeInspect', brandCx + 5, y + 8.8, { size: 9, bold: true, color: NAVY, align: 'center' })
-    text(doc, 'HEIGHT SAFETY INSPECTIONS', brandCx, y + 13.5, { size: 4.4, color: SLATE500, align: 'center' })
+    // Abseal lockup is roughly 2.13:1 — fit it inside the brand cell
+    const cellW = cols[6] - cols[5] - pad * 2
+    const logoW = Math.min(cellW, 26)
+    const logoH = logoW / 2.13
+    doc.addImage(ctx.logoB64, 'PNG', brandCx - logoW / 2, y + 2.5, logoW, logoH, undefined, 'FAST')
   } else {
-    text(doc, 'SafeInspect', brandCx, y + 9, { size: 11, bold: true, color: NAVY, align: 'center' })
-    text(doc, 'HEIGHT SAFETY INSPECTIONS', brandCx, y + 13, { size: 5, color: SLATE500, align: 'center' })
+    text(doc, 'ABSEAL', brandCx, y + 9, { size: 11, bold: true, color: NAVY, align: 'center' })
+    text(doc, 'PTY LTD', brandCx, y + 13, { size: 5, color: SLATE500, align: 'center' })
   }
   const ds = layout.plan.drawing_scaled || inspection.drawing_scaled
   text(doc, 'DRAWING SCALED', cols[5] + pad, y + 19.5, { size: 5, bold: true, color: SLATE500 })
