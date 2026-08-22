@@ -31,6 +31,7 @@ export type NewPlanFeature = {
   geometry_type: PlanGeometryType
   geometry: PlanPoint[]
   label?: string | null
+  group_id?: string | null
 }
 
 // ─── Draft shape ─────────────────────────────────────────────
@@ -122,6 +123,17 @@ interface InspectionState {
   createSitePlan: (inspectionId: string, name: string) => Promise<SitePlan>
   uploadSitePlanImage: (inspectionId: string, file: File, planId?: string) => Promise<string>
   addFeature: (feature: NewPlanFeature) => PlanFeature
+  /** One-tap field capture: auto-numbers a new asset in the category,
+   *  creates its linked feature, and syncs the asset row
+   *  (queued for replay when offline). */
+  quickPlaceAsset: (
+    category: AssetCategory,
+    geometry: PlanPoint[],
+    opts?: { groupId?: string | null; geometryType?: PlanGeometryType }
+  ) => Promise<PlanFeature>
+  /** Give the features a shared group_id → rendered as one range label. */
+  groupFeatures: (featureIds: string[]) => string | null
+  ungroupFeatures: (groupId: string) => void
   updateFeature: (id: string, patch: Partial<PlanFeature>) => void
   removeFeature: (id: string) => void
   syncFeaturesFromAssets: () => void   // auto-create point features for unplaced assets
@@ -561,6 +573,7 @@ export const useInspectionStore = create<InspectionState>()(
             asset_id: feature.asset_id ?? null,
             label: feature.label ?? feature.asset_code,
             label_offset: null,
+            group_id: feature.group_id ?? null,
             sort_order: get().planFeatures.length,
           }
           set((s) => ({
@@ -568,6 +581,91 @@ export const useInspectionStore = create<InspectionState>()(
             siteMapDirty: true,
           }))
           return row
+        },
+
+        quickPlaceAsset: async (category, geometry, opts) => {
+          const { activePlanId, activeInspectionId } = get()
+          if (!activePlanId || !activeInspectionId) {
+            throw new Error('No active site plan')
+          }
+          const assetCode = get().getNextAssetCode(category)
+          const status = get().getDefaultAssetStatus()
+
+          // Optimistic asset row: created locally with a client UUID so the
+          // feature links immediately; the insert is queued for replay if
+          // the device is offline (roof capture must never block on signal).
+          const now = new Date().toISOString()
+          const assetRow: InspectionAsset = {
+            id: crypto.randomUUID(),
+            inspection_id: activeInspectionId,
+            category,
+            asset_code: assetCode,
+            location_on_site: null,
+            photo_refs: [],
+            status,
+            priority: null,
+            finding: null,
+            standard_referenced: 'AS/NZS 1891.4:2009',
+            corrective_action: null,
+            sort_order: get().assetsByCategory[category]?.length ?? 0,
+            created_at: now,
+            updated_at: now,
+          }
+
+          const feature = get().addFeature({
+            site_plan_id: activePlanId,
+            inspection_id: activeInspectionId,
+            asset_id: assetRow.id,
+            asset_code: assetCode,
+            category,
+            status,
+            geometry_type: opts?.geometryType ?? 'point',
+            geometry,
+            group_id: opts?.groupId ?? null,
+          })
+
+          const updated = [...get().assets, assetRow]
+          const byCategory: Partial<Record<AssetCategory, InspectionAsset[]>> = {}
+          for (const a of updated) {
+            const cat = a.category as AssetCategory
+            if (!byCategory[cat]) byCategory[cat] = []
+            byCategory[cat]!.push(a)
+          }
+          set({ assets: updated, assetsByCategory: byCategory })
+
+          const { created_at: _c, updated_at: _u, ...insertRow } = assetRow
+          try {
+            const { error } = await supabase
+              .from('inspection_assets')
+              .upsert(insertRow)
+            if (error) throw error
+          } catch {
+            useSyncQueue.getState().enqueue('upsert_asset', insertRow)
+          }
+
+          return feature
+        },
+
+        groupFeatures: (featureIds) => {
+          if (featureIds.length < 2) return null
+          const groupId = crypto.randomUUID()
+          const ids = new Set(featureIds)
+          set((s) => ({
+            planFeatures: s.planFeatures.map((f) =>
+              ids.has(f.id) ? { ...f, group_id: groupId } : f
+            ),
+            siteMapDirty: true,
+          }))
+          return groupId
+        },
+
+        ungroupFeatures: (groupId) => {
+          set((s) => ({
+            planFeatures: s.planFeatures.map((f) =>
+              f.group_id === groupId ? { ...f, group_id: null } : f
+            ),
+            siteMapDirty: true,
+          }))
         },
 
         updateFeature: (id, patch) => {
@@ -611,6 +709,7 @@ export const useInspectionStore = create<InspectionState>()(
                 }],
                 label: asset.asset_code,
                 label_offset: null,
+                group_id: null,
                 sort_order: planFeatures.length + idx,
                 ...localTimestamps(),
               })
@@ -736,9 +835,21 @@ export const useInspectionStore = create<InspectionState>()(
         },
 
         getNextAssetCode: (category) => {
-          const existing = get().assetsByCategory[category] ?? []
-          const next = existing.length + 1
-          return `${category}-${String(next).padStart(3, '0')}`
+          // Max existing suffix + 1 (count-based numbering collides after
+          // deletions). Features are scanned too so map-only placements
+          // that haven't synced an asset yet still advance the sequence.
+          const { assets, planFeatures } = get()
+          const prefix = `${category}-`
+          let max = 0
+          for (const code of [
+            ...assets.filter((a) => a.category === category).map((a) => a.asset_code),
+            ...planFeatures.filter((f) => f.category === category).map((f) => f.asset_code),
+          ]) {
+            if (!code.startsWith(prefix)) continue
+            const n = parseInt(code.slice(prefix.length), 10)
+            if (Number.isFinite(n) && n > max) max = n
+          }
+          return `${prefix}${String(max + 1).padStart(3, '0')}`
         },
 
         getOverallStatus: (): OverallSiteStatus => {
