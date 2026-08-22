@@ -1,5 +1,8 @@
 import { useState, useRef, useCallback } from 'react'
 import { supabase } from '@/lib/supabase'
+import { resolveStorageUrl } from '@/lib/storageUrls'
+import { useSyncQueue, isOfflineError } from '@/lib/syncQueue'
+import { savePhoto } from '@/lib/photoOutbox'
 
 export interface PhotoEntry {
   id: string            // temp UUID before upload, then asset_photo.id
@@ -9,6 +12,8 @@ export interface PhotoEntry {
   storagePath: string | null  // set after upload
   publicUrl: string | null
   uploading: boolean
+  /** Waiting in the offline outbox — will upload when back online */
+  queued: boolean
   error: string | null
 }
 
@@ -40,6 +45,7 @@ export function usePhotoCapture({
       storagePath: null,
       publicUrl: null,
       uploading: false,
+      queued: false,
       error: null,
     }))
     setPhotos((prev) => [...prev, ...newEntries])
@@ -55,9 +61,45 @@ export function usePhotoCapture({
       prev.map((p) => p.id === photoId ? { ...p, uploading: true, error: null } : p)
     )
 
+    const ext = photo.file.name.split('.').pop() ?? 'jpg'
+    const path = `${inspectionId}/${resolvedAssetId}/${photoId}.${ext}`
+    const sortOrder = photos.indexOf(photo)
+
+    // Queue instead of uploading when the device is offline, or
+    // when the asset row itself is still waiting in the outbox
+    // (the photo row references it, so it must land first).
+    const queuePhoto = async () => {
+      await savePhoto({
+        id: photoId,
+        inspectionId,
+        assetId: resolvedAssetId,
+        storagePath: path,
+        contentType: photo.file!.type || 'image/jpeg',
+        caption: photo.caption || null,
+        sortOrder,
+        uploadedBy: userId,
+        blob: photo.file!,
+        queuedAt: new Date().toISOString(),
+      })
+      useSyncQueue.getState().enqueue('upload_photo', `Photo for asset`, { photoId })
+      setPhotos((prev) =>
+        prev.map((p) =>
+          p.id === photoId
+            ? { ...p, uploading: false, queued: true, storagePath: path, file: null, error: null }
+            : p
+        )
+      )
+    }
+
+    const mustQueue =
+      (typeof navigator !== 'undefined' && !navigator.onLine) ||
+      useSyncQueue.getState().hasQueuedAsset(resolvedAssetId)
+
     try {
-      const ext = photo.file.name.split('.').pop() ?? 'jpg'
-      const path = `inspection-photos/${inspectionId}/${resolvedAssetId}/${photoId}.${ext}`
+      if (mustQueue) {
+        await queuePhoto()
+        return
+      }
 
       const { error: uploadErr } = await supabase.storage
         .from('inspection-photos')
@@ -65,29 +107,34 @@ export function usePhotoCapture({
 
       if (uploadErr) throw uploadErr
 
-      const { data: urlData } = supabase.storage
-        .from('inspection-photos')
-        .getPublicUrl(path)
-
-      // Write to asset_photos table
-      await supabase.from('asset_photos').insert({
+      // Buckets are private: persist the path, sign URLs at read time
+      const { error: rowErr } = await supabase.from('asset_photos').insert({
+        id: photoId,
         inspection_id: inspectionId,
         asset_id: resolvedAssetId,
         storage_path: path,
-        public_url: urlData.publicUrl,
         caption: photo.caption || null,
-        sort_order: photos.indexOf(photo),
+        sort_order: sortOrder,
         uploaded_by: userId,
       })
+      if (rowErr) throw rowErr
+
+      const signedUrl = await resolveStorageUrl('inspection-photos', path)
 
       setPhotos((prev) =>
         prev.map((p) =>
           p.id === photoId
-            ? { ...p, uploading: false, storagePath: path, publicUrl: urlData.publicUrl, file: null }
+            ? { ...p, uploading: false, storagePath: path, publicUrl: signedUrl, file: null }
             : p
         )
       )
     } catch (err) {
+      if (isOfflineError(err)) {
+        try {
+          await queuePhoto()
+          return
+        } catch { /* IndexedDB unavailable — fall through to error state */ }
+      }
       const msg = err instanceof Error ? err.message : 'Upload failed'
       setPhotos((prev) =>
         prev.map((p) => p.id === photoId ? { ...p, uploading: false, error: msg } : p)

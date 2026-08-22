@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en-AU">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SafeInspect — Client Portal</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<header class="bar hidden" id="bar">
+  <div class="brand">Safe<span>Inspect</span></div>
+  <div class="who" id="who"></div>
+  <button id="signout">Sign out</button>
+</header>
+
+<div class="login" id="login">
+  <div class="card">
+    <div class="brand" style="font-size:20px;margin-bottom:4px">Safe<span>Inspect</span></div>
+    <p class="muted" style="margin:0 0 6px">Client portal — Abseal Pty Ltd</p>
+    <form id="loginform">
+      <label for="email">Email</label>
+      <input id="email" type="email" autocomplete="username" required>
+      <label for="password">Password</label>
+      <input id="password" type="password" autocomplete="current-password" required>
+      <button class="primary" id="signin" type="submit"
+              style="width:100%;margin-top:18px">Sign in</button>
+    </form>
+    <div class="err" id="loginerr"></div>
+  </div>
+  <p class="faint" style="text-align:center">
+    Height-safety compliance records for your sites.
+  </p>
+</div>
+
+<main id="app" class="hidden"></main>
+
+<script src="vendor/supabase.js"></script>
+<script src="config.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

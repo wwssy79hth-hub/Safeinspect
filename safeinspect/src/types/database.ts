@@ -49,6 +49,19 @@ export type Priority = 1 | 2 | 3
 
 export type UserRole = 'admin' | 'inspector' | 'viewer'
 
+export type ServiceCondition = 'standard' | 'harsh'
+
+/** Durable registry asset lifecycle (distinct from per-visit AssetStatus) */
+export type RegistryAssetStatus = 'active' | 'do_not_use' | 'removed'
+
+export type AlertKind = 'recert_due' | 'recert_overdue' | 'certificate_expiring'
+
+export type TestMethod =
+  | 'proof_load'
+  | 'documentation_review'
+  | 'functional_test'
+  | 'visual_inspection'
+
 // ─── Asset Category Codes ─────────────────────────────────────
 
 export type AssetCategory =
@@ -179,6 +192,7 @@ export interface Database {
           aerial_map_url: string | null
           drawing_scaled: boolean | null
           notes: string | null
+          site_id: string | null
           created_at: string
           updated_at: string
           created_by: string
@@ -206,6 +220,7 @@ export interface Database {
           standard_referenced: string | null
           corrective_action: string | null
           sort_order: number
+          asset_id: string | null
           created_at: string
           updated_at: string
         }
@@ -214,7 +229,22 @@ export interface Database {
           'inspection_id' | 'category' | 'asset_code'
         >
         Update: Partial<Database['public']['Tables']['inspection_assets']['Row']>
-        Relationships: []
+        Relationships: [
+          {
+            foreignKeyName: 'inspection_assets_inspection_id_fkey'
+            columns: ['inspection_id']
+            isOneToOne: false
+            referencedRelation: 'inspections'
+            referencedColumns: ['id']
+          },
+          {
+            foreignKeyName: 'inspection_assets_asset_id_fkey'
+            columns: ['asset_id']
+            isOneToOne: false
+            referencedRelation: 'assets'
+            referencedColumns: ['id']
+          },
+        ]
       }
 
       asset_photos: {
@@ -303,6 +333,190 @@ export interface Database {
         Update: Partial<Database['public']['Tables']['inspection_summary']['Row']>
         Relationships: []
       }
+
+      clients: {
+        Row: {
+          id: string
+          name: string
+          contact_name: string | null
+          contact_email: string | null
+          contact_phone: string | null
+          created_at: string
+          updated_at: string
+        }
+        Insert: Insertable<
+          Database['public']['Tables']['clients']['Row'],
+          'name'
+        >
+        Update: Partial<Database['public']['Tables']['clients']['Row']>
+        Relationships: []
+      }
+
+      sites: {
+        Row: {
+          id: string
+          client_id: string
+          name: string
+          address: string
+          service_condition: ServiceCondition
+          notes: string | null
+          created_at: string
+          updated_at: string
+        }
+        Insert: Insertable<
+          Database['public']['Tables']['sites']['Row'],
+          'client_id' | 'name' | 'address'
+        >
+        Update: Partial<Database['public']['Tables']['sites']['Row']>
+        Relationships: [
+          {
+            foreignKeyName: 'sites_client_id_fkey'
+            columns: ['client_id']
+            isOneToOne: false
+            referencedRelation: 'clients'
+            referencedColumns: ['id']
+          },
+        ]
+      }
+
+      assets: {
+        Row: {
+          id: string
+          site_id: string
+          category: AssetCategory
+          tag: string
+          serial_number: string | null
+          manufacturer: string | null
+          model: string | null
+          installed_on: string | null
+          location_note: string | null
+          status: RegistryAssetStatus
+          last_pass_on: string | null
+          next_due_on: string | null
+          created_at: string
+          updated_at: string
+        }
+        Insert: Insertable<
+          Database['public']['Tables']['assets']['Row'],
+          'site_id' | 'category' | 'tag'
+        >
+        Update: Partial<Database['public']['Tables']['assets']['Row']>
+        Relationships: []
+      }
+
+      certificates: {
+        Row: {
+          id: string
+          certificate_number: string
+          inspection_id: string
+          site_id: string | null
+          issue_type: IssueType
+          overall_status: OverallSiteStatus | null
+          issued_by: string
+          issued_at: string
+          expires_on: string | null
+          standard_line: string
+          document_path: string | null
+          asset_count: number
+          compliant_count: number
+          revoked_at: string | null
+          revoked_reason: string | null
+          revoked_by: string | null
+        }
+        Insert: never   // issue_certificate() RPC only
+        Update: never   // append-only; revoke_certificate() RPC only
+        Relationships: []
+      }
+
+      alerts: {
+        Row: {
+          id: string
+          kind: AlertKind
+          asset_id: string | null
+          site_id: string | null
+          certificate_id: string | null
+          due_on: string
+          title: string
+          detail: string | null
+          created_at: string
+          resolved_at: string | null
+        }
+        Insert: never   // raised by sweep_due_date_alerts() only
+        Update: never
+        Relationships: []
+      }
+
+      alert_recipients: {
+        Row: {
+          alert_id: string
+          user_id: string
+          acknowledged_at: string | null
+        }
+        Insert: never
+        Update: never   // acknowledge_alert() RPC only
+        Relationships: [
+          {
+            foreignKeyName: 'alert_recipients_alert_id_fkey'
+            columns: ['alert_id']
+            isOneToOne: false
+            referencedRelation: 'alerts'
+            referencedColumns: ['id']
+          },
+        ]
+      }
+
+      standards: {
+        Row: {
+          code: string
+          edition: string
+          title: string
+          effective_from: string
+          superseded_from: string | null
+        }
+        Insert: Insertable<
+          Database['public']['Tables']['standards']['Row'],
+          'code' | 'edition' | 'title' | 'effective_from'
+        >
+        Update: Partial<Database['public']['Tables']['standards']['Row']>
+        Relationships: []
+      }
+
+      asset_classes: {
+        Row: {
+          code: AssetCategory
+          name: string
+          standard_code: string
+          is_installed: boolean
+        }
+        Insert: Insertable<
+          Database['public']['Tables']['asset_classes']['Row'],
+          'code' | 'name' | 'standard_code'
+        >
+        Update: Partial<Database['public']['Tables']['asset_classes']['Row']>
+        Relationships: []
+      }
+
+      inspection_rules: {
+        Row: {
+          asset_class_code: AssetCategory
+          standard_code: string
+          standard_edition: string
+          service_condition: ServiceCondition
+          interval_months: number
+          test_method: TestMethod
+          effective_from: string
+          source_note: string | null
+          verified_by: string | null
+          verified_at: string | null
+        }
+        Insert: Insertable<
+          Database['public']['Tables']['inspection_rules']['Row'],
+          'asset_class_code' | 'standard_code' | 'standard_edition'
+          | 'interval_months' | 'test_method' | 'effective_from'
+        >
+        Update: Partial<Database['public']['Tables']['inspection_rules']['Row']>
+        Relationships: []
+      }
     }
 
     Views: {
@@ -310,6 +524,30 @@ export interface Database {
     }
 
     Functions: {
+      issue_certificate: {
+        Args: { p_inspection_id: string; p_document_path?: string | null }
+        Returns: Database['public']['Tables']['certificates']['Row']
+      }
+      revoke_certificate: {
+        Args: { p_certificate_id: string; p_reason: string }
+        Returns: undefined
+      }
+      acknowledge_alert: {
+        Args: { p_alert_id: string }
+        Returns: undefined
+      }
+      sweep_due_date_alerts: {
+        Args: { p_lead_days?: number }
+        Returns: undefined
+      }
+      applicable_rule: {
+        Args: { p_class: AssetCategory; p_condition?: string; p_on?: string }
+        Returns: Database['public']['Tables']['inspection_rules']['Row'] | null
+      }
+      next_due_date: {
+        Args: { p_class: AssetCategory; p_condition: string; p_last_pass: string }
+        Returns: string | null
+      }
       get_inspection_summary: {
         Args: { p_inspection_id: string }
         Returns: {
@@ -342,5 +580,13 @@ export type Inspection = Database['public']['Tables']['inspections']['Row']
 export type InspectionAsset = Database['public']['Tables']['inspection_assets']['Row']
 export type AssetPhoto = Database['public']['Tables']['asset_photos']['Row']
 export type InspectionSummaryRow = Database['public']['Tables']['inspection_summary']['Row']
+export type Certificate = Database['public']['Tables']['certificates']['Row']
+export type AlertRow = Database['public']['Tables']['alerts']['Row']
+export type ClientRow = Database['public']['Tables']['clients']['Row']
+export type SiteRow = Database['public']['Tables']['sites']['Row']
+export type RegistryAsset = Database['public']['Tables']['assets']['Row']
+export type StandardRow = Database['public']['Tables']['standards']['Row']
+export type AssetClassRow = Database['public']['Tables']['asset_classes']['Row']
+export type InspectionRuleRow = Database['public']['Tables']['inspection_rules']['Row']
 export type SitePlan = Database['public']['Tables']['site_plans']['Row']
 export type PlanFeature = Database['public']['Tables']['plan_features']['Row']

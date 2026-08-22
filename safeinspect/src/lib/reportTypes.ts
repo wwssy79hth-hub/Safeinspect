@@ -42,18 +42,18 @@ export interface ReportTypeConfig {
   nextDateLabel: string
 }
 
-const STANDARDS = 'AS1891.4:2009, AS1657-2018, AS5532-2013'
+const STANDARDS = 'AS/NZS 1891.4:2025, AS 1657-2018, AS/NZS 5532:2013'
 
 export const REPORT_TYPE_CONFIG: Record<IssueType, ReportTypeConfig> = {
   recertification: {
     label: 'Recertification',
-    description: 'Annual AS1891.4:2009 recertification of an existing system',
+    description: 'Annual AS/NZS 1891.4:2025 recertification of an existing system',
     documentTitle: 'RECERTIFICATION REPORT',
     runningHeader: 'HEIGHT SAFETY RECERTIFICATION REPORT',
     filenameStem: 'Recertification',
     declaration:
-      'This is a Recertification Assessment of the Height Safety System in Accordance with AS1891.4:2009 ' +
-      'Section 9 - Inspection, Maintenance and Storage, and other relevant manufacturer requirements. ' +
+      'This is a Recertification Assessment of the Height Safety System in Accordance with the ' +
+      'inspection, maintenance and storage requirements of AS/NZS 1891.4:2025, and other relevant manufacturer requirements. ' +
       'The report presents a detailed assessment of the Height Safety Systems in place, highlighting areas ' +
       'that require improvement and making recommendations to rectify any non-compliances. Standards referenced: ' +
       `${STANDARDS} and applicable manufacturer requirements.`,
@@ -73,8 +73,8 @@ export const REPORT_TYPE_CONFIG: Record<IssueType, ReportTypeConfig> = {
     filenameStem: 'Installation_Verification',
     declaration:
       'This is an Installation and Verification Assessment of a newly installed Height Safety System, ' +
-      'carried out in accordance with AS1891.4:2009 Section 9 - Inspection, Maintenance and Storage, ' +
-      'AS5532-2013 and the manufacturer’s installation requirements. Each item listed has been installed, ' +
+      'carried out in accordance with the inspection, maintenance and storage requirements of ' +
+      'AS/NZS 1891.4:2025, AS/NZS 5532:2013 and the manufacturer’s installation requirements. Each item listed has been installed, ' +
       'load tested where required, and verified as fit for service at the date of this report. Standards referenced: ' +
       `${STANDARDS} and applicable manufacturer requirements.`,
     isProposal: false,
@@ -113,8 +113,8 @@ export const REPORT_TYPE_CONFIG: Record<IssueType, ReportTypeConfig> = {
     runningHeader: 'HEIGHT SAFETY INITIAL INSPECTION REPORT',
     filenameStem: 'Initial_Inspection',
     declaration:
-      'This is an Initial Assessment of the Height Safety System in Accordance with AS1891.4:2009 ' +
-      'Section 9 - Inspection, Maintenance and Storage, and other relevant manufacturer requirements. ' +
+      'This is an Initial Assessment of the Height Safety System in Accordance with the ' +
+      'inspection, maintenance and storage requirements of AS/NZS 1891.4:2025, and other relevant manufacturer requirements. ' +
       'The report presents a detailed assessment of the Height Safety Systems in place, highlighting areas ' +
       'that require improvement and making recommendations to rectify any non-compliances. Standards referenced: ' +
       `${STANDARDS} and applicable manufacturer requirements.`,
@@ -133,8 +133,8 @@ export const REPORT_TYPE_CONFIG: Record<IssueType, ReportTypeConfig> = {
     runningHeader: 'HEIGHT SAFETY FOLLOW-UP REPORT',
     filenameStem: 'Follow_Up',
     declaration:
-      'This is a Follow-Up Assessment of the Height Safety System in Accordance with AS1891.4:2009 ' +
-      'Section 9 - Inspection, Maintenance and Storage, and other relevant manufacturer requirements. ' +
+      'This is a Follow-Up Assessment of the Height Safety System in Accordance with the ' +
+      'inspection, maintenance and storage requirements of AS/NZS 1891.4:2025, and other relevant manufacturer requirements. ' +
       'It records the outcome of corrective action taken against previously reported non-compliances. ' +
       `Standards referenced: ${STANDARDS} and applicable manufacturer requirements.`,
     isProposal: false,

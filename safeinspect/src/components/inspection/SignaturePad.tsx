@@ -1,8 +1,9 @@
-import { useRef, useState, useCallback } from 'react'
+import { useRef, useState, useEffect, useCallback } from 'react'
 import SignatureCanvas from 'react-signature-canvas'
 import { CheckCircle2, RotateCcw, Save, PenTool, User, AlertCircle, Upload } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { supabase } from '@/lib/supabase'
+import { resolveStorageUrl } from '@/lib/storageUrls'
 
 // ─── Types ────────────────────────────────────────────────────
 
@@ -11,6 +12,7 @@ export type SignatureRole = 'certifier'
 export interface SignatureResult {
   role: SignatureRole
   dataUrl: string
+  /** Storage path persisted to the database (bucket is private) */
   storageUrl: string
 }
 
@@ -34,7 +36,7 @@ async function uploadSignature(
   // Convert data URL to blob
   const res  = await fetch(dataUrl)
   const blob = await res.blob()
-  const path = `signatures/${inspectionId}/${role}_${Date.now()}.png`
+  const path = `${inspectionId}/${role}_${Date.now()}.png`
 
   const { error } = await supabase.storage
     .from('signatures')
@@ -42,8 +44,8 @@ async function uploadSignature(
 
   if (error) throw error
 
-  const { data } = supabase.storage.from('signatures').getPublicUrl(path)
-  return data.publicUrl
+  // The bucket is private — persist the path; sign URLs at read time
+  return path
 }
 
 // ─── Single pad ───────────────────────────────────────────────
@@ -55,8 +57,22 @@ function SinglePad({
   const [saving,   setSaving]   = useState(false)
   const [isEmpty,  setIsEmpty]  = useState(true)
   const [saved,    setSaved]    = useState(!!existingUrl)
-  const [savedUrl, setSavedUrl] = useState<string | null>(existingUrl ?? null)
+  const [savedUrl, setSavedUrl] = useState<string | null>(null)
   const [error,    setError]    = useState<string | null>(null)
+
+  // The stored value is a storage path (or a legacy URL) — resolve
+  // it to a signed URL for display.
+  useEffect(() => {
+    let alive = true
+    if (existingUrl) {
+      resolveStorageUrl('signatures', existingUrl).then((url) => {
+        if (alive) setSavedUrl(url)
+      })
+    } else {
+      setSavedUrl(null)
+    }
+    return () => { alive = false }
+  }, [existingUrl])
 
   const handleBegin = () => setIsEmpty(false)
 
@@ -73,11 +89,11 @@ function SinglePad({
     setError(null)
     try {
       const dataUrl = canvasRef.current.toDataURL('image/png')
-      const storageUrl = await uploadSignature(inspectionId, role, dataUrl)
-      setSavedUrl(storageUrl)
+      const storagePath = await uploadSignature(inspectionId, role, dataUrl)
+      setSavedUrl(dataUrl)  // display the freshly drawn signature directly
       setSaved(true)
       setIsEmpty(true)
-      onSaved({ role, dataUrl, storageUrl })
+      onSaved({ role, dataUrl, storageUrl: storagePath })
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Upload failed')
     } finally {

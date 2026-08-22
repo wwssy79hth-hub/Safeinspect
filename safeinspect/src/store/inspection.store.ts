@@ -1,8 +1,11 @@
 import { create } from 'zustand'
 import { devtools, persist } from 'zustand/middleware'
 import { supabase } from '@/lib/supabase'
-import { useSyncQueue } from '@/lib/syncQueue'
+import { useSyncQueue, isOfflineError } from '@/lib/syncQueue'
+import { resolveStorageUrl } from '@/lib/storageUrls'
 import { defaultAssetStatusFor, isProposalReport } from '@/lib/reportTypes'
+import { DEFAULT_STANDARD } from '@/lib/inspection-data'
+import { findOrCreateSite } from '@/lib/registry'
 import type {
   Inspection,
   InspectionAsset,
@@ -233,6 +236,12 @@ export const useInspectionStore = create<InspectionState>()(
           if (!draft) throw new Error('No draft to save')
           set({ saving: true, error: null })
           try {
+            // Resolve the durable site record (created if new); the
+            // free-text columns stay as denormalised display copies.
+            const siteId = await findOrCreateSite(
+              draft.client_name, draft.site_name, draft.site_address
+            )
+
             const { data, error } = await supabase
               .from('inspections')
               .insert({
@@ -247,6 +256,7 @@ export const useInspectionStore = create<InspectionState>()(
                 inspection_status: 'draft',
                 certifier_id: draft.certifier_id || userId,
                 created_by: userId,
+                site_id: siteId,
               })
               .select()
               .single()
@@ -300,6 +310,15 @@ export const useInspectionStore = create<InspectionState>()(
               inspections: s.inspections.map((i) => (i.id === id ? data : i)),
             }))
           } catch (err) {
+            if (isOfflineError(err)) {
+              useSyncQueue.getState().enqueue('update_inspection', 'Update inspection details', { id, ...patch })
+              set((s) => ({
+                activeInspection: s.activeInspection && s.activeInspection.id === id
+                  ? { ...s.activeInspection, ...patch }
+                  : s.activeInspection,
+              }))
+              return
+            }
             const msg = err instanceof Error ? err.message : 'Failed to update inspection'
             set({ error: msg })
             throw err
@@ -333,25 +352,25 @@ export const useInspectionStore = create<InspectionState>()(
 
         upsertAsset: async (asset) => {
           set({ saving: true, error: null })
-          try {
-            const sortOrder = get().assetsByCategory[asset.category]?.length ?? 0
-            const payload = {
-              ...asset,
-              sort_order: asset.sort_order ?? sortOrder,
-              standard_referenced: asset.standard_referenced ?? 'AS/NZS 1891.4:2009',
-              photo_refs: asset.photo_refs ?? [],
-            }
-            const { data, error } = await supabase
-              .from('inspection_assets')
-              .upsert(payload)
-              .select()
-              .single()
-            if (error) throw error
+          // Client-generated id makes the save replayable from the
+          // outbox — a replay upserts on (inspection_id, asset_code)
+          // and lands on the same row.
+          const id = asset.id ?? crypto.randomUUID()
+          const sortOrder = get().assetsByCategory[asset.category]?.length ?? 0
+          const payload = {
+            ...asset,
+            id,
+            sort_order: asset.sort_order ?? sortOrder,
+            standard_referenced: asset.standard_referenced ?? DEFAULT_STANDARD,
+            photo_refs: asset.photo_refs ?? [],
+          }
+
+          const applyLocal = (row: InspectionAsset) => {
             const existing = get().assets
-            const idx = existing.findIndex((a) => a.id === data.id)
+            const idx = existing.findIndex((a) => a.id === row.id)
             const updated = idx >= 0
-              ? existing.map((a) => (a.id === data.id ? data : a))
-              : [...existing, data]
+              ? existing.map((a) => (a.id === row.id ? row : a))
+              : [...existing, row]
             const byCategory: Partial<Record<AssetCategory, InspectionAsset[]>> = {}
             for (const a of updated) {
               const cat = a.category as AssetCategory
@@ -361,15 +380,49 @@ export const useInspectionStore = create<InspectionState>()(
             set({ assets: updated, assetsByCategory: byCategory })
 
             // Auto-sync feature status if one exists for this asset code
-            const feature = get().planFeatures.find((f) => f.asset_code === data.asset_code)
-            if (feature && feature.status !== data.status) {
+            const feature = get().planFeatures.find((f) => f.asset_code === row.asset_code)
+            if (feature && feature.status !== row.status) {
               get().updateFeature(feature.id, {
-                status: data.status as AssetStatus,
-                asset_id: data.id,
+                status: row.status as AssetStatus,
+                asset_id: row.id,
               })
             }
+          }
+
+          try {
+            const { data, error } = await supabase
+              .from('inspection_assets')
+              .upsert(payload, { onConflict: 'inspection_id,asset_code' })
+              .select()
+              .single()
+            if (error) throw error
+            applyLocal(data)
             return data
           } catch (err) {
+            if (isOfflineError(err)) {
+              // Queue for replay and keep working locally
+              useSyncQueue.getState().enqueue(
+                'upsert_asset',
+                `Save ${payload.asset_code}`,
+                payload
+              )
+              const now = new Date().toISOString()
+              const local: InspectionAsset = {
+                location_on_site: null,
+                status: 'compliant',
+                priority: null,
+                finding: null,
+                corrective_action: null,
+                asset_id: null,
+                ...payload,
+                standard_referenced: payload.standard_referenced,
+                created_at: now,
+                updated_at: now,
+              } as InspectionAsset
+              applyLocal(local)
+              set({ saving: false })
+              return local
+            }
             const msg = err instanceof Error ? err.message : 'Failed to save asset'
             set({ error: msg })
             throw err
@@ -380,12 +433,7 @@ export const useInspectionStore = create<InspectionState>()(
 
         deleteAsset: async (assetId) => {
           set({ saving: true, error: null })
-          try {
-            const { error } = await supabase
-              .from('inspection_assets')
-              .delete()
-              .eq('id', assetId)
-            if (error) throw error
+          const applyLocal = () => {
             const updated = get().assets.filter((a) => a.id !== assetId)
             const byCategory: Partial<Record<AssetCategory, InspectionAsset[]>> = {}
             for (const a of updated) {
@@ -394,7 +442,21 @@ export const useInspectionStore = create<InspectionState>()(
               byCategory[cat]!.push(a)
             }
             set({ assets: updated, assetsByCategory: byCategory })
+          }
+          try {
+            const { error } = await supabase
+              .from('inspection_assets')
+              .delete()
+              .eq('id', assetId)
+            if (error) throw error
+            applyLocal()
           } catch (err) {
+            if (isOfflineError(err)) {
+              const code = get().assets.find((a) => a.id === assetId)?.asset_code ?? 'item'
+              useSyncQueue.getState().enqueue('delete_asset', `Delete ${code}`, { id: assetId })
+              applyLocal()
+              return
+            }
             const msg = err instanceof Error ? err.message : 'Failed to delete asset'
             set({ error: msg })
             throw err
@@ -444,12 +506,21 @@ export const useInspectionStore = create<InspectionState>()(
               }
             }
 
+            // Buckets are private: resolve stored paths (or legacy
+            // URLs) to signed display URLs before handing to the UI.
+            const resolved = await Promise.all(
+              plans.map(async (p) => ({
+                ...p,
+                image_url: await resolveStorageUrl('aerial-maps', p.image_path ?? p.image_url),
+              }))
+            )
+
             set((s) => ({
-              sitePlans: plans,
+              sitePlans: resolved,
               planFeatures: featuresRes.data as PlanFeature[],
               deletedFeatureIds: [],
               activePlanId:
-                plans.find((p) => p.id === s.activePlanId)?.id ?? plans[0]?.id ?? null,
+                resolved.find((p) => p.id === s.activePlanId)?.id ?? resolved[0]?.id ?? null,
               siteMapDirty: false,
             }))
           } catch (err) {
@@ -503,22 +574,19 @@ export const useInspectionStore = create<InspectionState>()(
 
             const dims = await readImageDimensions(file)
             const ext = file.name.split('.').pop() ?? 'jpg'
-            const path = `aerial-maps/${inspectionId}/${plan.id}.${ext}`
+            const path = `${inspectionId}/${plan.id}.${ext}`
             const { error: uploadErr } = await supabase.storage
               .from('aerial-maps')
               .upload(path, file, { upsert: true, contentType: file.type })
             if (uploadErr) throw uploadErr
 
-            const { data: urlData } = supabase.storage
-              .from('aerial-maps')
-              .getPublicUrl(path)
-            const publicUrl = urlData.publicUrl
-
+            // The bucket is private: persist the path; display goes
+            // through a short-lived signed URL resolved at read time.
             const { data: updated, error: updateErr } = await supabase
               .from('site_plans')
               .update({
                 image_path: path,
-                image_url: publicUrl,
+                image_url: null,
                 image_width: dims?.width ?? null,
                 image_height: dims?.height ?? null,
               })
@@ -532,18 +600,21 @@ export const useInspectionStore = create<InspectionState>()(
             if (isFirstPlan) {
               await supabase
                 .from('inspections')
-                .update({ aerial_map_url: publicUrl })
+                .update({ aerial_map_url: path })
                 .eq('id', inspectionId)
             }
 
+            const displayUrl = (await resolveStorageUrl('aerial-maps', path)) ?? ''
+            const localPlan = { ...(updated as SitePlan), image_url: displayUrl }
+
             set((s) => ({
-              sitePlans: s.sitePlans.map((p) => (p.id === plan!.id ? (updated as SitePlan) : p)),
+              sitePlans: s.sitePlans.map((p) => (p.id === plan!.id ? localPlan : p)),
               activeInspection: isFirstPlan && s.activeInspection
-                ? { ...s.activeInspection, aerial_map_url: publicUrl }
+                ? { ...s.activeInspection, aerial_map_url: path }
                 : s.activeInspection,
             }))
 
-            return publicUrl
+            return displayUrl
           } catch (err) {
             const msg = err instanceof Error ? err.message : 'Failed to upload site plan'
             set({ error: msg })
@@ -649,14 +720,18 @@ export const useInspectionStore = create<InspectionState>()(
             }
             set({ siteMapDirty: false, deletedFeatureIds: [] })
           } catch (err) {
-            // Offline / transient failure: queue for replay, keep local state
-            useSyncQueue.getState().enqueue('save_plan_features', {
-              upserts,
-              deleteIds: deletedFeatureIds,
-            })
-            set({ siteMapDirty: false, deletedFeatureIds: [] })
+            if (isOfflineError(err)) {
+              // Connectivity failure: queue for replay, keep local state
+              useSyncQueue.getState().enqueue('save_plan_features', 'Save site plan features', {
+                upserts,
+                deleteIds: deletedFeatureIds,
+              })
+              set({ siteMapDirty: false, deletedFeatureIds: [] })
+              return
+            }
             const msg = err instanceof Error ? err.message : 'Failed to save site plan'
-            console.warn('[SiteMap] Save queued for retry:', msg)
+            set({ error: msg })
+            throw err
           } finally {
             set({ saving: false })
           }

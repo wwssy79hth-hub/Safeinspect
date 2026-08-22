@@ -7,6 +7,7 @@ import {
 import { useState } from 'react'
 import { cn } from '@/lib/utils'
 import { useAuthStore, selectDisplayName } from '@/store/auth.store'
+import { useAlerts } from '@/lib/alerts'
 
 // ─── Nav items ────────────────────────────────────────────────
 
@@ -25,6 +26,7 @@ export function AppShell() {
   const navigate = useNavigate()
   const { signOut, profile } = useAuthStore()
   const displayName = useAuthStore(selectDisplayName)
+  const { unacknowledged: unacknowledgedAlerts } = useAlerts()
 
   const handleSignOut = async () => {
     await signOut()
@@ -184,10 +186,16 @@ export function AppShell() {
             </div>
             <span className="font-display text-base font-bold text-white">SafeInspect</span>
           </div>
-          <button className="p-2 -mr-2 rounded-xl text-slate-400 hover:text-white hover:bg-surface-overlay relative">
+          <button
+            onClick={() => navigate('/alerts')}
+            className="p-2 -mr-2 rounded-xl text-slate-400 hover:text-white hover:bg-surface-overlay relative"
+          >
             <Bell size={20} />
-            {/* Notification dot */}
-            <span className="absolute top-2 right-2 w-2 h-2 rounded-full bg-brand-orange" />
+            {unacknowledgedAlerts > 0 && (
+              <span className="absolute top-1 right-1 min-w-[16px] h-4 px-1 rounded-full bg-brand-orange text-white text-[9px] font-bold flex items-center justify-center">
+                {unacknowledgedAlerts > 9 ? '9+' : unacknowledgedAlerts}
+              </span>
+            )}
           </button>
         </header>
 

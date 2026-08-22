@@ -12,6 +12,8 @@ import ResetPasswordPage from '@/pages/auth/ResetPasswordPage'
 import Dashboard      from '@/pages/Dashboard'
 import NewInspection  from '@/pages/inspections/NewInspection'
 import InspectionDetail from '@/pages/inspections/InspectionDetail'
+import SyncStatusPage from '@/pages/SyncStatusPage'
+import AlertsPage     from '@/pages/AlertsPage'
 
 // ── Stubs (built in Step 3+) ─────────────────────────────────
 const Stub = ({ label }: { label: string }) => (
@@ -73,6 +75,8 @@ const router = createBrowserRouter([
         element: <AppShell />,
         children: [
           { path: '/dashboard',             element: <Dashboard /> },
+          { path: '/sync',                  element: <SyncStatusPage /> },
+          { path: '/alerts',                element: <AlertsPage /> },
           { path: '/inspections',           element: <Stub label="Inspections List" /> },
           { path: '/inspections/new',       element: <NewInspection /> },
           { path: '/inspections/scan',      element: <Stub label="QR Scanner" /> },

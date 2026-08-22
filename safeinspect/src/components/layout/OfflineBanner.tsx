@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { Link } from 'react-router-dom'
 import { WifiOff, Wifi, RefreshCw, CheckCircle2, AlertTriangle } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useOnlineStatus } from '@/hooks/useOnlineStatus'
@@ -43,10 +44,13 @@ export function OfflineBanner() {
             </p>
           </div>
           {queue.length > 0 && (
-            <div className="flex items-center gap-1 bg-status-recommendation/10 border border-status-recommendation/30 rounded-lg px-2 py-1">
+            <Link
+              to="/sync"
+              className="flex items-center gap-1 bg-status-recommendation/10 border border-status-recommendation/30 rounded-lg px-2 py-1 hover:bg-status-recommendation/20 transition-colors"
+            >
               <AlertTriangle size={11} className="text-status-recommendation" />
-              <span className="text-status-recommendation text-[10px] font-bold">{queue.length}</span>
-            </div>
+              <span className="text-status-recommendation text-[10px] font-bold">{queue.length} · view</span>
+            </Link>
           )}
         </div>
         {/* Degraded mode indicator strip */}
@@ -84,7 +88,9 @@ export function OfflineBanner() {
             <p className="text-slate-400 text-xs mt-0.5">
               {isSyncing
                 ? `${queue.length} item${queue.length !== 1 ? 's' : ''} to sync`
-                : 'All changes synced successfully'
+                : queue.length > 0
+                  ? <>Some items did not sync — <Link to="/sync" className="underline">review them</Link></>
+                  : 'All changes synced successfully'
               }
             </p>
           </div>

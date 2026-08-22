@@ -11,6 +11,7 @@ import {
 import { cn } from '@/lib/utils'
 import { useAuthStore } from '@/store/auth.store'
 import { useInspectionStore, selectDraftComplete } from '@/store/inspection.store'
+import { useSites } from '@/lib/registry'
 import type { IssueType } from '@/types/database'
 import { REPORT_TYPE_CONFIG, REPORT_TYPE_ORDER } from '@/lib/reportTypes'
 
@@ -253,6 +254,20 @@ export default function NewInspection() {
     updateDraft({ [field]: value } as Parameters<typeof updateDraft>[0])
   }
 
+  // Known sites from the registry: picking one autofills client +
+  // address, so a returning site is never retyped (or forked by a
+  // typo into a second registry entry).
+  const sites = useSites()
+  const handleSiteName = (value: string) => {
+    syncField('site_name', value)
+    const match = sites.find((s) => s.name === value)
+    if (match) {
+      setValue('client_name', match.client_name, { shouldValidate: true })
+      setValue('site_address', match.address, { shouldValidate: true })
+      updateDraft({ client_name: match.client_name, site_address: match.address })
+    }
+  }
+
   const handleGPS = async () => {
     gps.capture()
   }
@@ -295,13 +310,13 @@ export default function NewInspection() {
           </button>
           <div className="flex-1">
             <h1 className="font-display text-base font-bold text-white">New Inspection</h1>
-            <p className="text-slate-500 text-xs">AS1891.4:2009 · AS1657-2018 · AS5532-2013</p>
+            <p className="text-slate-500 text-xs">AS/NZS 1891.4:2025 · AS 1657-2018 · AS/NZS 5532:2013</p>
           </div>
         </div>
 
         {/* Standards badge bar */}
         <div className="px-4 pb-3 flex gap-2 overflow-x-auto scrollbar-none">
-          {['AS1891.4:2009', 'AS1657-2018', 'AS5532-2013'].map((s) => (
+          {['AS/NZS 1891.4:2025', 'AS 1657-2018', 'AS/NZS 5532:2013'].map((s) => (
             <span
               key={s}
               className="shrink-0 text-[10px] font-mono font-medium text-brand-orange bg-brand-orange/10 border border-brand-orange/20 px-2 py-0.5 rounded-md"
@@ -396,8 +411,21 @@ export default function NewInspection() {
               <TextInput
                 placeholder="e.g. Emporium Melbourne"
                 hasError={!!errors.site_name}
-                {...register('site_name', { onChange: (e) => syncField('site_name', e.target.value) })}
+                list="known-sites"
+                {...register('site_name', { onChange: (e) => handleSiteName(e.target.value) })}
               />
+              <datalist id="known-sites">
+                {sites.map((s) => (
+                  <option key={s.id} value={s.name}>
+                    {s.client_name ? `${s.client_name} — ${s.address}` : s.address}
+                  </option>
+                ))}
+              </datalist>
+              {sites.length > 0 && (
+                <p className="mt-1.5 text-[11px] text-slate-600">
+                  {sites.length} known site{sites.length === 1 ? '' : 's'} — pick one to autofill client &amp; address
+                </p>
+              )}
             </Field>
 
             <Field label="Site Address" icon={MapPin} error={errors.site_address?.message}>

@@ -1,5 +1,5 @@
 import {
-  useState, useEffect, useCallback, useRef,
+  useState, useEffect, useCallback, useMemo, useRef,
 } from 'react'
 import {
   Camera, ImagePlus, X, MapPin, CheckCircle2, XCircle,
@@ -11,11 +11,12 @@ import { cn } from '@/lib/utils'
 import { useAuthStore } from '@/store/auth.store'
 import { useInspectionStore } from '@/store/inspection.store'
 import { allowedAssetStatusesFor, defaultAssetStatusFor } from '@/lib/reportTypes'
+import { useStandards, standardOptionsFor } from '@/lib/standards'
+import { useAssetContext } from '@/lib/registry'
 import { usePhotoCapture } from '@/hooks/usePhotoCapture'
 import {
   QUICK_FILL_OPTIONS,
   INSPECTION_CHECKLIST,
-  CATEGORY_STANDARDS,
   PRIORITY_CONFIG,
   ASSET_STATUS_CONFIG,
   getDefaultStandard,
@@ -90,6 +91,15 @@ function PhotoStrip(props: ReturnType<typeof usePhotoCapture>) {
               {photo.uploading && (
                 <div className="absolute inset-0 bg-black/50 flex items-center justify-center">
                   <span className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                </div>
+              )}
+              {/* Queued for offline sync */}
+              {photo.queued && (
+                <div
+                  className="absolute bottom-1.5 left-1.5 px-1.5 py-0.5 rounded bg-black/70 text-[9px] font-bold text-status-recommendation uppercase tracking-wide"
+                  title="Saved on this device — uploads when back online"
+                >
+                  Queued
                 </div>
               )}
               {/* Error state */}
@@ -307,6 +317,18 @@ export function AssetItemForm({
   const allowedStatuses = allowedAssetStatusesFor(issueType)
   const statusOptions  = STATUS_OPTIONS.filter((o) => allowedStatuses.includes(o.value))
 
+  // Referenced-standard options come from the standards tables when
+  // available (current editions first), with static fallbacks.
+  const standardsData = useStandards()
+  const standardOptions = useMemo(() => {
+    const opts = standardOptionsFor(standardsData, category)
+    for (const s of ['AS/NZS 1891.1:2007', 'AS/NZS 1891.2:2001', 'AS 1657-2018',
+                     'AS 5532-2013', 'AS/NZS 4488.2:1997', 'AS/NZS 4994.1:2009', 'AS 1319-1994']) {
+      if (!opts.includes(s)) opts.push(s)
+    }
+    return opts
+  }, [standardsData, category])
+
   const isNew = !asset
   const [expanded, setExpanded] = useState(defaultExpanded || isNew)
   const [dirty, setDirty] = useState(isNew)
@@ -329,6 +351,21 @@ export function AssetItemForm({
     assetId: savedAssetId,
     userId: user?.id ?? '',
   })
+
+  // Durable-asset history for the tag being captured (debounced so
+  // typing a code doesn't fire a query per keystroke). This is the
+  // registry's payoff: "this anchor's previous results", in the
+  // capture flow.
+  const [historyTag, setHistoryTag] = useState(asset?.asset_code ?? '')
+  useEffect(() => {
+    const t = setTimeout(() => setHistoryTag(form.asset_code), 500)
+    return () => clearTimeout(t)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [form.asset_code])
+  const assetContext = useAssetContext(
+    activeInspection?.site_id, category, historyTag, inspectionId
+  )
+  const lastVisit = assetContext?.history[0] ?? null
 
   const patch = useCallback((updates: Partial<FormState>) => {
     setForm((prev) => ({ ...prev, ...updates }))
@@ -524,6 +561,52 @@ export function AssetItemForm({
             </div>
           </div>
 
+          {/* ── Registry history for this asset ──────────────── */}
+          {assetContext && (
+            <div className={cn(
+              'rounded-xl border px-3 py-2.5 text-xs leading-relaxed',
+              assetContext.asset.status === 'do_not_use'
+                ? 'border-status-noncompliant/40 bg-status-noncompliant-bg/10'
+                : 'border-surface-border bg-surface-base'
+            )}>
+              <div className="flex items-center gap-1.5 text-slate-400 font-semibold uppercase tracking-widest text-[10px] mb-1">
+                <BookOpen size={11} className="text-brand-orange" />
+                Asset history — {assetContext.asset.tag}
+                {assetContext.asset.status === 'do_not_use' && (
+                  <span className="ml-auto text-status-noncompliant normal-case tracking-normal font-bold">
+                    TAGGED DO NOT USE
+                  </span>
+                )}
+              </div>
+              {lastVisit ? (
+                <p className="text-slate-400">
+                  Last visit{' '}
+                  <span className="text-white">{lastVisit.date_of_inspection}</span>:{' '}
+                  <span className={cn(
+                    'font-semibold',
+                    lastVisit.status === 'compliant' ? 'text-status-compliant'
+                      : lastVisit.status === 'non_compliant' ? 'text-status-noncompliant'
+                      : 'text-slate-300'
+                  )}>
+                    {lastVisit.status.replace('_', '-')}
+                  </span>
+                  {assetContext.asset.next_due_on && (
+                    <> · next due <span className="text-white">{assetContext.asset.next_due_on}</span></>
+                  )}
+                  {lastVisit.finding && (
+                    <span className="block text-slate-500 mt-0.5 line-clamp-2">
+                      “{lastVisit.finding}”
+                    </span>
+                  )}
+                </p>
+              ) : (
+                <p className="text-slate-500">
+                  In the register — no results from previous visits.
+                </p>
+              )}
+            </div>
+          )}
+
           {/* ── Status selector ──────────────────────────────── */}
           <div>
             <FieldLabel
@@ -653,14 +736,13 @@ export function AssetItemForm({
                 onChange={(e) => patch({ standard_referenced: e.target.value })}
                 className="w-full h-11 bg-surface-base border border-surface-border rounded-xl px-3 pr-9 text-white text-sm appearance-none focus:outline-none focus:ring-2 focus:ring-brand-orange/50 hover:border-slate-500 transition-colors"
               >
-                {(CATEGORY_STANDARDS[category] ?? ['AS/NZS 1891.4:2009']).map((s) => (
+                {standardOptions.map((s) => (
                   <option key={s} value={s}>{s}</option>
                 ))}
-                {/* Additional standards not in the default list */}
-                {['AS/NZS 1891.4:2009', 'AS 1657-2018', 'AS 5532-2013', 'AS/NZS 1891.1:2007',
-                  'AS/NZS 1891.2:2001', 'AS/NZS 4488.2:1997', 'AS/NZS 4994.1:2009', 'AS 1319-1994']
-                  .filter((s) => !(CATEGORY_STANDARDS[category] ?? []).includes(s))
-                  .map((s) => <option key={s} value={s}>{s}</option>)}
+                {/* A stored value from an older edition stays selectable */}
+                {form.standard_referenced && !standardOptions.includes(form.standard_referenced) && (
+                  <option value={form.standard_referenced}>{form.standard_referenced}</option>
+                )}
               </select>
               <ChevronDown size={13} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500 pointer-events-none" />
             </div>
