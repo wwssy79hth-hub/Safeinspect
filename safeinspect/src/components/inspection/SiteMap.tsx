@@ -4,7 +4,7 @@ import {
 import {
   Upload, ZoomIn, ZoomOut, RotateCcw, Save, MapPin, X,
   Link2, CheckCircle2, XCircle, AlertCircle, MinusCircle,
-  Info, Layers, Eye, EyeOff, ChevronDown, ChevronUp, ImageIcon,
+  Info, Layers, Eye, EyeOff, ChevronDown, ChevronUp, ImageIcon, PencilRuler,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import {
@@ -20,6 +20,7 @@ const PIN_CONFIG: Record<AssetStatus, {
   compliant:      { bg: '#16a34a', border: '#15803d', text: '#fff', label: 'Compliant',      icon: CheckCircle2 },
   non_compliant:  { bg: '#dc2626', border: '#b91c1c', text: '#fff', label: 'Non-Compliant',  icon: XCircle     },
   recommendation: { bg: '#d97706', border: '#b45309', text: '#fff', label: 'Recommendation', icon: AlertCircle },
+  proposed:       { bg: '#2563eb', border: '#1d4ed8', text: '#fff', label: 'Proposed',       icon: PencilRuler },
   'n/a':          { bg: '#475569', border: '#334155', text: '#fff', label: 'N/A',             icon: MinusCircle },
 }
 
@@ -112,6 +113,7 @@ function MapLegend({ markers }: { markers: SiteMapMarker[] }) {
     compliant:      markers.filter((m) => m.status === 'compliant').length,
     non_compliant:  markers.filter((m) => m.status === 'non_compliant').length,
     recommendation: markers.filter((m) => m.status === 'recommendation').length,
+    proposed:       markers.filter((m) => m.status === 'proposed').length,
     'n/a':          markers.filter((m) => m.status === 'n/a').length,
   }
 

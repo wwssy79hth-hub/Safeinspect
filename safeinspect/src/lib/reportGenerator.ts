@@ -12,6 +12,10 @@ import autoTable from 'jspdf-autotable'
 import { format, parseISO, addYears } from 'date-fns'
 import { supabase } from '@/lib/supabase'
 import { ASSET_CATEGORY_LABELS, ASSET_CATEGORIES } from '@/types/database'
+import {
+  reportTypeConfig, displayStatus, isProposalReport,
+  type ReportTypeConfig,
+} from '@/lib/reportTypes'
 import type {
   Inspection, InspectionAsset, AssetCategory,
   AssetStatus, Profile,
@@ -28,6 +32,8 @@ const C = {
   nonCompliantBg:   [254, 226, 226] as [number, number, number],
   recommendation:   [217, 119, 6]   as [number, number, number],
   recommendationBg: [254, 243, 199] as [number, number, number],
+  proposed:         [37,  99,  235] as [number, number, number],
+  proposedBg:       [219, 234, 254] as [number, number, number],
   naBg:             [241, 245, 249] as [number, number, number],
   na:               [100, 116, 139] as [number, number, number],
   p1:               [220, 38,  38]  as [number, number, number],
@@ -65,6 +71,7 @@ function statusColors(status: AssetStatus): {
     case 'compliant':      return { bg: C.compliantBg,      text: C.compliant,      label: 'COMPLIANT'      }
     case 'non_compliant':  return { bg: C.nonCompliantBg,   text: C.nonCompliant,   label: 'NON-COMPLIANT'  }
     case 'recommendation': return { bg: C.recommendationBg, text: C.recommendation, label: 'RECOMMENDATION' }
+    case 'proposed':       return { bg: C.proposedBg,       text: C.proposed,       label: 'PROPOSED'       }
     case 'n/a':            return { bg: C.naBg,             text: C.na,             label: 'N/A'            }
   }
 }
@@ -81,17 +88,21 @@ function priorityLabel(p: number): string {
   return               'P3 — PLANNED'
 }
 
-function issueTypeLabel(t: string): string {
-  if (t === 'recertification')       return 'Recertification'
-  if (t === 'non_compliant_follow_up') return 'Non-Compliant Follow-Up'
-  return 'Initial Inspection'
+function siteStatusLabel(s: string | null): string {
+  if (s === 'compliant')           return 'COMPLIANT'
+  if (s === 'non_compliant')       return 'NON-COMPLIANT'
+  if (s === 'partially_compliant') return 'PARTIALLY COMPLIANT'
+  if (s === 'proposed')            return 'PROPOSED — NOT YET INSTALLED'
+  return 'PENDING'
 }
 
-function siteStatusLabel(s: string | null): string {
-  if (s === 'compliant')         return 'COMPLIANT'
-  if (s === 'non_compliant')     return 'NON-COMPLIANT'
-  if (s === 'partially_compliant') return 'PARTIALLY COMPLIANT'
-  return 'PENDING'
+/**
+ * Status to print for an asset, resolved against the report type.
+ * On a proposed anchor installation nothing is installed yet, so no item
+ * can be reported as compliant — those items print as PROPOSED.
+ */
+function assetStatus(asset: InspectionAsset, inspection: Inspection): AssetStatus {
+  return displayStatus(asset.status as AssetStatus, inspection.issue_type)
 }
 
 // ─── Low-level drawing helpers ────────────────────────────────
@@ -204,6 +215,8 @@ interface ReportData {
   photosByAsset: Record<string, Array<{ url: string; caption: string | null }>>
   aerialMapB64: string | null
   signatureB64: string | null
+  /** Report-type driven wording + status presentation rules */
+  reportType: ReportTypeConfig
 }
 
 async function fetchReportData(inspectionId: string): Promise<ReportData> {
@@ -215,7 +228,7 @@ async function fetchReportData(inspectionId: string): Promise<ReportData> {
   ])
 
   if (inspRes.error) throw inspRes.error
-  const inspection = inspRes.data
+  const inspection = inspRes.data as Inspection
 
   // Certifier profile
   const { data: certifier } = await supabase
@@ -252,6 +265,7 @@ async function fetchReportData(inspectionId: string): Promise<ReportData> {
     photosByAsset,
     aerialMapB64,
     signatureB64,
+    reportType: reportTypeConfig(inspection.issue_type),
   }
 }
 
@@ -265,7 +279,7 @@ function drawPageHeaderFooter(
 
   // ── Header bar ──────────────────────────────────────────────
   d.rect(0, 0, A4.w, 11, C.navy)
-  d.text('HEIGHT SAFETY RECERTIFICATION REPORT', A4.w / 2, 7,
+  d.text(reportTypeConfig(inspection.issue_type).runningHeader, A4.w / 2, 7,
     { size: 7.5, bold: true, color: C.white, align: 'center' })
   d.text('Abseal Pty Ltd', M.l, 7, { size: 7, color: [249, 155, 80] })
   d.text(`Page ${pageNum} of ${totalPages}`, A4.w - M.r, 7,
@@ -315,7 +329,7 @@ function drawKVRow(
 // ─── PAGE 1: Cover ────────────────────────────────────────────
 
 function drawCoverPage(d: PDFDrawer, data: ReportData) {
-  const { inspection, certifier } = data
+  const { inspection, certifier, reportType } = data
 
   d.y = 14  // start below global header band
 
@@ -325,14 +339,15 @@ function drawCoverPage(d: PDFDrawer, data: ReportData) {
   // Decorative orange accent strip
   d.rect(M.l, d.y, 4, 48, C.orange)
 
-  // Report type badge
-  d.rect(M.l + 8, d.y + 6, 60, 8, C.orange)
-  d.text(issueTypeLabel(inspection.issue_type).toUpperCase(),
-    M.l + 38, d.y + 11.2, { size: 7.5, bold: true, color: C.white, align: 'center' })
+  // Report type badge — widened to fit the longer report type names
+  const badgeW = 78
+  d.rect(M.l + 8, d.y + 6, badgeW, 8, reportType.isProposal ? C.proposed : C.orange)
+  d.text(reportType.label.toUpperCase(),
+    M.l + 8 + badgeW / 2, d.y + 11.2, { size: 7.5, bold: true, color: C.white, align: 'center' })
 
   // Main title
   d.text('HEIGHT SAFETY', M.l + 8, d.y + 23, { size: 20, bold: true, color: C.white })
-  d.text('RECERTIFICATION REPORT', M.l + 8, d.y + 32, { size: 13, bold: true, color: C.orange })
+  d.text(reportType.documentTitle, M.l + 8, d.y + 32, { size: 13, bold: true, color: C.orange })
 
   // Standards line
   d.text('AS1891.4:2009  │  AS1657-2018  │  AS5532-2013',
@@ -349,6 +364,19 @@ function drawCoverPage(d: PDFDrawer, data: ReportData) {
   d.hr(d.y, C.orange, 0.6)
   d.gap(6)
 
+  // ── Proposal notice ──────────────────────────────────────────
+  // Nothing in a proposal has been installed, so say so up front.
+  if (reportType.isProposal) {
+    d.ensureSpace(16)
+    d.rect(M.l, d.y, CW, 13, C.proposedBg, C.proposed)
+    d.rect(M.l, d.y, 3, 13, C.proposed)
+    d.text('PROPOSED INSTALLATION — NOT YET INSTALLED', M.l + 6, d.y + 5,
+      { size: 8, bold: true, color: C.proposed })
+    d.text('All items in this report are proposed. They have not been installed, load tested or certified.',
+      M.l + 6, d.y + 9.8, { size: 7, color: C.slate700 })
+    d.y += 17
+  }
+
   // ── Site Details table ───────────────────────────────────────
   drawSectionHeading(d, 'Site Details')
 
@@ -360,7 +388,7 @@ function drawCoverPage(d: PDFDrawer, data: ReportData) {
     ['Date of Inspection',   format(parseISO(inspection.date_of_inspection), 'dd/MM/yyyy')],
     ['Job Number',           inspection.job_number],
     ['Quote Number',         inspection.quote_number ?? '—'],
-    ['Issue Type',           issueTypeLabel(inspection.issue_type)],
+    ['Report Type',          reportType.label],
   ]
 
   let ky = d.y
@@ -402,23 +430,24 @@ function drawCoverPage(d: PDFDrawer, data: ReportData) {
   d.y += 20
 
   // ── Declaration ──────────────────────────────────────────────
-  d.ensureSpace(28)
+  // Box height follows the text — declarations differ per report type.
+  const declText = reportType.declaration
+  d.doc.setFontSize(7)
+  d.doc.setFont('helvetica', 'normal')
+  const splitDecl = d.doc.splitTextToSize(declText, CW - 8)
+  const declH = splitDecl.length * 3.2 + 9
+
+  d.ensureSpace(declH + 4)
   d.gap(3)
-  d.rect(M.l, d.y, CW, 24, [240, 244, 255], C.navy)
-  d.rect(M.l, d.y, 3, 24, C.navy)
-  d.text('DECLARATION', M.l + 5, d.y + 5, { size: 7.5, bold: true, color: C.navy })
-  const declText =
-    'This is a Recertification Assessment of the Height Safety System in Accordance with AS1891.4:2009 ' +
-    'Section 9 - Inspection, Maintenance and Storage, and other relevant manufacturer requirements. ' +
-    'The report presents a detailed assessment of the Height Safety Systems in place, highlighting areas ' +
-    'that require improvement and making recommendations to rectify any non-compliances. Standards referenced: ' +
-    'AS1891.4:2009, AS1657-2018, AS5532-2013 and applicable manufacturer requirements.'
+  const accent = reportType.isProposal ? C.proposed : C.navy
+  d.rect(M.l, d.y, CW, declH, reportType.isProposal ? C.proposedBg : [240, 244, 255], accent)
+  d.rect(M.l, d.y, 3, declH, accent)
+  d.text('DECLARATION', M.l + 5, d.y + 5, { size: 7.5, bold: true, color: accent })
   d.doc.setFontSize(7)
   d.doc.setFont('helvetica', 'normal')
   d.setTextColor(C.slate700)
-  const splitDecl = d.doc.splitTextToSize(declText, CW - 8)
   d.doc.text(splitDecl, M.l + 5, d.y + 10)
-  d.y += 27
+  d.y += declH + 3
 }
 
 // ─── PAGE 2: Inspection Summary ───────────────────────────────
@@ -427,59 +456,78 @@ function drawSummaryPage(d: PDFDrawer, data: ReportData) {
   d.doc.addPage()
   d.y = 14
 
-  const { assets, inspection } = data
+  const { assets, inspection, reportType } = data
+  const proposal = reportType.isProposal
 
-  // Compute per-category counts
-  const catMap = new Map<AssetCategory, { total:number; compliant:number; non_compliant:number; recommendation:number }>()
+  // Compute per-category counts against the *displayed* status, so a
+  // proposal counts proposed items rather than claiming compliance.
+  const catMap = new Map<AssetCategory, { total:number; positive:number; non_compliant:number; recommendation:number }>()
   for (const asset of assets) {
     const cat = asset.category as AssetCategory
-    if (!catMap.has(cat)) catMap.set(cat, { total: 0, compliant: 0, non_compliant: 0, recommendation: 0 })
+    if (!catMap.has(cat)) catMap.set(cat, { total: 0, positive: 0, non_compliant: 0, recommendation: 0 })
+    const st = assetStatus(asset, inspection)
     const s = catMap.get(cat)!
     s.total++
-    if (asset.status === 'compliant')      s.compliant++
-    if (asset.status === 'non_compliant')  s.non_compliant++
-    if (asset.status === 'recommendation') s.recommendation++
+    if (st === (proposal ? 'proposed' : 'compliant')) s.positive++
+    if (st === 'non_compliant')  s.non_compliant++
+    if (st === 'recommendation') s.recommendation++
   }
 
+  const displayed    = assets.map((a) => assetStatus(a, inspection))
   const totalAll     = assets.length
-  const compliantAll = assets.filter((a) => a.status === 'compliant').length
-  const ncAll        = assets.filter((a) => a.status === 'non_compliant').length
-  const recAll       = assets.filter((a) => a.status === 'recommendation').length
-  const compliancePct = totalAll > 0 ? Math.round((compliantAll / totalAll) * 100) : 0
+  const positiveAll  = displayed.filter((st) => st === (proposal ? 'proposed' : 'compliant')).length
+  const ncAll        = displayed.filter((st) => st === 'non_compliant').length
+  const recAll       = displayed.filter((st) => st === 'recommendation').length
+  const compliancePct = totalAll > 0 ? Math.round((positiveAll / totalAll) * 100) : 0
 
-  drawSectionHeading(d, 'Inspection Item Summary',
+  drawSectionHeading(d,
+    proposal ? 'Proposed Item Summary' : 'Inspection Item Summary',
     `${inspection.site_name}  ·  ${format(parseISO(inspection.date_of_inspection), 'd MMMM yyyy')}`)
 
-  // Overall compliance bar
+  // Headline metric. A proposal has no compliance to report, so it shows
+  // the size of the proposed scope instead of a compliance percentage.
   d.ensureSpace(20)
   d.rect(M.l, d.y, CW, 16, C.slate50, C.slate200)
 
-  // Compliance fill
-  const barX = M.l + 44, barW = CW - 48, barH = 5, barY = d.y + 5.5
-  d.rect(barX, barY, barW, barH, C.slate200)
-  const fillW = Math.max(1, (compliancePct / 100) * barW)
-  d.rect(barX, barY, fillW, barH,
-    compliancePct >= 80 ? C.compliant : compliancePct >= 50 ? C.recommendation : C.nonCompliant)
+  d.text(reportType.overallMetricLabel, M.l + 2, d.y + 6, { size: 7, bold: true, color: C.navy })
 
-  d.text('OVERALL COMPLIANCE', M.l + 2, d.y + 6, { size: 7, bold: true, color: C.navy })
-  d.text(`${compliancePct}%`, M.l + 2, d.y + 12, { size: 9, bold: true,
-    color: compliancePct >= 80 ? C.compliant : compliancePct >= 50 ? C.recommendation : C.nonCompliant })
-  d.text(`${totalAll} items  ·  ${compliantAll} compliant  ·  ${ncAll} non-compliant  ·  ${recAll} recommendations`,
-    barX, d.y + 13.5, { size: 6.5, color: C.slate500 })
+  if (proposal) {
+    d.text(`${positiveAll} proposed item${positiveAll === 1 ? '' : 's'}`, M.l + 2, d.y + 12,
+      { size: 9, bold: true, color: C.proposed })
+    d.text('No compliance status is reported — none of these items have been installed or certified yet.',
+      M.l + 44, d.y + 9.5, { size: 6.5, color: C.slate500, maxW: CW - 48 })
+  } else {
+    const barX = M.l + 44, barW = CW - 48, barH = 5, barY = d.y + 5.5
+    d.rect(barX, barY, barW, barH, C.slate200)
+    const fillW = Math.max(1, (compliancePct / 100) * barW)
+    d.rect(barX, barY, fillW, barH,
+      compliancePct >= 80 ? C.compliant : compliancePct >= 50 ? C.recommendation : C.nonCompliant)
+
+    d.text(`${compliancePct}%`, M.l + 2, d.y + 12, { size: 9, bold: true,
+      color: compliancePct >= 80 ? C.compliant : compliancePct >= 50 ? C.recommendation : C.nonCompliant })
+    d.text(`${totalAll} items  ·  ${positiveAll} ${reportType.positiveColumnLabel.toLowerCase()}  ·  ${ncAll} non-compliant  ·  ${recAll} recommendations`,
+      barX, d.y + 13.5, { size: 6.5, color: C.slate500 })
+  }
   d.y += 20
 
   // Overall site status
-  const osStatus = inspection.overall_status
-  const osCols = osStatus === 'compliant' ? { bg: C.compliantBg, text: C.compliant } :
+  const osStatus = proposal ? 'proposed' : inspection.overall_status
+  const osCols = osStatus === 'proposed' ? { bg: C.proposedBg, text: C.proposed } :
+                 osStatus === 'compliant' ? { bg: C.compliantBg, text: C.compliant } :
                  osStatus === 'non_compliant' ? { bg: C.nonCompliantBg, text: C.nonCompliant } :
                  { bg: C.recommendationBg, text: C.recommendation }
   d.gap(2)
   d.rect(M.l, d.y, CW, 8, osCols.bg, osCols.text)
-  d.text('OVERALL SITE STATUS:', M.l + 3, d.y + 5.5, { size: 8, bold: true, color: osCols.text })
+  d.text(proposal ? 'PROPOSAL STATUS:' : 'OVERALL SITE STATUS:', M.l + 3, d.y + 5.5,
+    { size: 8, bold: true, color: osCols.text })
   d.text(siteStatusLabel(osStatus), M.l + 50, d.y + 5.5, { size: 8, bold: true, color: osCols.text })
   d.y += 10
 
-  // Summary table
+  // Summary table. A proposal has no compliance to tally, so the
+  // non-compliant column is dropped rather than printed as a row of zeros.
+  const ncColIdx = proposal ? -1 : 4
+  const recColIdx = proposal ? 4 : 5
+
   const tableRows: (string | { content: string; styles: object })[][] = []
   for (const cat of ASSET_CATEGORIES) {
     const s = catMap.get(cat)
@@ -488,25 +536,39 @@ function drawSummaryPage(d: PDFDrawer, data: ReportData) {
       ASSET_CATEGORY_LABELS[cat],
       cat,
       String(s.total),
-      String(s.compliant),
-      String(s.non_compliant),
+      String(s.positive),
+      ...(proposal ? [] : [String(s.non_compliant)]),
       String(s.recommendation),
     ])
   }
 
   // Totals row
+  const positiveTint: [number, number, number] = proposal ? [170, 205, 255] : [180, 255, 180]
+  const totalCell = (value: number, tint: [number, number, number]) => ({
+    content: String(value),
+    styles: { fontStyle: 'bold', fillColor: C.navy, textColor: tint, halign: 'center' },
+  })
   tableRows.push([
     { content: 'TOTALS', styles: { fontStyle: 'bold', fillColor: C.navy, textColor: C.white } },
-    { content: '',        styles: { fillColor: C.navy } },
-    { content: String(totalAll),     styles: { fontStyle: 'bold', fillColor: C.navy, textColor: C.white, halign: 'center' } },
-    { content: String(compliantAll), styles: { fontStyle: 'bold', fillColor: C.navy, textColor: [180,255,180], halign: 'center' } },
-    { content: String(ncAll),        styles: { fontStyle: 'bold', fillColor: C.navy, textColor: ncAll > 0 ? [255,160,160] : [180,255,180], halign: 'center' } },
-    { content: String(recAll),       styles: { fontStyle: 'bold', fillColor: C.navy, textColor: recAll > 0 ? [255,220,120] : [180,255,180], halign: 'center' } },
+    { content: '',       styles: { fillColor: C.navy } },
+    totalCell(totalAll, C.white),
+    totalCell(positiveAll, positiveTint),
+    ...(proposal ? [] : [totalCell(ncAll, ncAll > 0 ? [255, 160, 160] : positiveTint)]),
+    totalCell(recAll, recAll > 0 ? [255, 220, 120] : positiveTint),
   ])
+
+  // Fresh object per column — autoTable mutates the style objects it is given
+  const countCol = () => ({
+    // Widths must sum to the content width (62 + 18 + 18 + counts = 182mm)
+    cellWidth: proposal ? 42 : 28, halign: 'center' as const, fontStyle: 'bold' as const,
+  })
 
   autoTable(d.doc, {
     startY: d.y,
-    head: [['Category', 'Code', 'Total', 'Compliant', 'Non-Compliant', 'Recommendation']],
+    head: [[
+      'Category', 'Code', 'Total', reportType.positiveColumnLabel,
+      ...(proposal ? [] : ['Non-Compliant']), 'Recommendation',
+    ]],
     body: tableRows,
     margin: { left: M.l, right: M.r },
     styles: { fontSize: 7.5, cellPadding: 2.5, font: 'helvetica', textColor: C.slate700 },
@@ -515,19 +577,19 @@ function drawSummaryPage(d: PDFDrawer, data: ReportData) {
       0: { cellWidth: 62, halign: 'left' },
       1: { cellWidth: 18, halign: 'center', font: 'courier', fontSize: 7, textColor: C.navy },
       2: { cellWidth: 18, halign: 'center' },
-      3: { cellWidth: 28, halign: 'center', textColor: C.compliant, fontStyle: 'bold' },
-      4: { cellWidth: 28, halign: 'center', fontStyle: 'bold' },
-      5: { cellWidth: 28, halign: 'center', fontStyle: 'bold' },
+      3: { ...countCol(), textColor: proposal ? C.proposed : C.compliant },
+      4: countCol(),
+      ...(proposal ? {} : { 5: countCol() }),
     },
     alternateRowStyles: { fillColor: C.slate50 },
     didParseCell: (hookData) => {
-      if (hookData.column.index === 4 && hookData.section === 'body') {
-        const val = parseInt(hookData.cell.text[0] ?? '0', 10)
-        if (val > 0) hookData.cell.styles.textColor = C.nonCompliant
+      if (hookData.section !== 'body') return
+      const val = parseInt(hookData.cell.text[0] ?? '0', 10)
+      if (hookData.column.index === ncColIdx && val > 0) {
+        hookData.cell.styles.textColor = C.nonCompliant
       }
-      if (hookData.column.index === 5 && hookData.section === 'body') {
-        const val = parseInt(hookData.cell.text[0] ?? '0', 10)
-        if (val > 0) hookData.cell.styles.textColor = C.recommendation
+      if (hookData.column.index === recColIdx && val > 0) {
+        hookData.cell.styles.textColor = C.recommendation
       }
     },
   })
@@ -547,11 +609,13 @@ async function drawCategorySection(
   d.y = 14
 
   const label = ASSET_CATEGORY_LABELS[category]
-  drawSectionHeading(d, label, `Code prefix: ${category}-001, ${category}-002, ${category}-003 …`)
+  drawSectionHeading(d,
+    data.reportType.isProposal ? `${label} — Proposed` : label,
+    `Code prefix: ${category}-001, ${category}-002, ${category}-003 …`)
 
   // Asset table (code, location, status, priority)
   const tableRows = catAssets.map((a) => {
-    const sc = statusColors(a.status)
+    const sc = statusColors(assetStatus(a, data.inspection))
     const prioLabel = a.priority ? priorityLabel(a.priority) : '—'
     return [
       { content: a.asset_code, styles: { fontStyle: 'bold', textColor: C.navy, font: 'courier' } },
@@ -595,7 +659,7 @@ async function drawCategorySection(
 async function drawAssetDetail(
   d: PDFDrawer, data: ReportData, asset: InspectionAsset
 ) {
-  const sc   = statusColors(asset.status)
+  const sc     = statusColors(assetStatus(asset, data.inspection))
   const photos = data.photosByAsset[asset.id] ?? []
 
   // Estimate height needed for this block
@@ -631,7 +695,8 @@ async function drawAssetDetail(
     d.ensureSpace(4)
     d.rect(M.l, d.y, CW, 5, C.slate100)
     d.rect(M.l, d.y, 2, 5, C.slate400)
-    d.text('FINDING', M.l + 4, d.y + 3.5, { size: 6, bold: true, color: C.slate400 })
+    d.text(data.reportType.isProposal ? 'PROPOSAL NOTES' : 'FINDING',
+      M.l + 4, d.y + 3.5, { size: 6, bold: true, color: C.slate400 })
     d.y += 5
 
     d.doc.setFontSize(7.5)
@@ -654,12 +719,15 @@ async function drawAssetDetail(
     d.y += 6
   }
 
-  // Corrective action
+  // Corrective action — on a proposal this is the proposed scope of works
   if (asset.corrective_action) {
+    const caAccent = data.reportType.isProposal ? C.proposed : C.nonCompliant
+    const caAccentBg = data.reportType.isProposal ? C.proposedBg : C.nonCompliantBg
     d.ensureSpace(6)
-    d.rect(M.l, d.y, CW, 5, C.nonCompliantBg)
-    d.rect(M.l, d.y, 2, 5, C.nonCompliant)
-    d.text('CORRECTIVE ACTION', M.l + 4, d.y + 3.5, { size: 6, bold: true, color: C.nonCompliant })
+    d.rect(M.l, d.y, CW, 5, caAccentBg)
+    d.rect(M.l, d.y, 2, 5, caAccent)
+    d.text(data.reportType.isProposal ? 'PROPOSED WORKS' : 'CORRECTIVE ACTION',
+      M.l + 4, d.y + 3.5, { size: 6, bold: true, color: caAccent })
     d.y += 5
 
     d.doc.setFontSize(7.5)
@@ -668,7 +736,8 @@ async function drawAssetDetail(
     const caLines = d.doc.splitTextToSize(asset.corrective_action, CW - 6)
     const caH = caLines.length * 4 + 4
     d.ensureSpace(caH)
-    d.rect(M.l, d.y, CW, caH, [255, 248, 248], C.nonCompliant)
+    d.rect(M.l, d.y, CW, caH,
+      data.reportType.isProposal ? [248, 250, 255] : [255, 248, 248], caAccent)
     d.doc.text(caLines, M.l + 3, d.y + 4)
     d.y += caH + 1
   }
@@ -744,9 +813,10 @@ async function drawAssetDetail(
 // ─── Recommendations summary page ────────────────────────────
 
 function drawRecommendationsSummary(d: PDFDrawer, data: ReportData) {
-  const issueAssets = data.assets.filter(
-    (a) => a.status === 'non_compliant' || a.status === 'recommendation'
-  )
+  const issueAssets = data.assets.filter((a) => {
+    const st = assetStatus(a, data.inspection)
+    return st === 'non_compliant' || st === 'recommendation'
+  })
   if (issueAssets.length === 0) return
 
   d.doc.addPage()
@@ -804,6 +874,71 @@ function drawRecommendationsSummary(d: PDFDrawer, data: ReportData) {
 
     d.y = (d.doc as unknown as { lastAutoTable: { finalY: number } }).lastAutoTable.finalY + 6
   }
+}
+
+// ─── Proposed installation schedule ───────────────────────────
+// Replaces the compliance-oriented summary on a proposal: a plain
+// schedule of everything being proposed, ready to price and install.
+
+function drawProposedScheduleSummary(d: PDFDrawer, data: ReportData) {
+  const proposedAssets = data.assets.filter(
+    (a) => assetStatus(a, data.inspection) === 'proposed'
+  )
+  if (proposedAssets.length === 0) return
+
+  d.doc.addPage()
+  d.y = 14
+
+  drawSectionHeading(d, 'Proposed Installation Schedule',
+    'Every item proposed for installation at this site. None of these items are installed or certified yet.')
+
+  const rows = proposedAssets.map((a) => [
+    { content: a.asset_code, styles: { fontStyle: 'bold' as const, font: 'courier', textColor: C.navy } },
+    ASSET_CATEGORY_LABELS[a.category as AssetCategory],
+    a.location_on_site ?? '—',
+    a.corrective_action || a.finding || '—',
+    { content: 'PROPOSED', styles: {
+        fillColor: C.proposedBg, textColor: C.proposed,
+        fontStyle: 'bold' as const, halign: 'center' as const, fontSize: 6.5,
+      }
+    },
+  ])
+
+  autoTable(d.doc, {
+    startY: d.y,
+    head: [['Asset Code', 'Category', 'Proposed Location', 'Proposed Works / Notes', 'Status']],
+    body: rows,
+    margin: { left: M.l, right: M.r },
+    styles: { fontSize: 7, cellPadding: 2, font: 'helvetica', textColor: C.slate700, overflow: 'linebreak' },
+    headStyles: { fillColor: C.proposed, textColor: C.white, fontStyle: 'bold', fontSize: 7 },
+    columnStyles: {
+      0: { cellWidth: 22 },
+      1: { cellWidth: 34 },
+      2: { cellWidth: 40, overflow: 'linebreak' },
+      3: { cellWidth: 62, overflow: 'linebreak' },
+      4: { cellWidth: 24, halign: 'center' },
+    },
+    alternateRowStyles: { fillColor: C.slate50 },
+  })
+
+  d.y = (d.doc as unknown as { lastAutoTable: { finalY: number } }).lastAutoTable.finalY + 6
+
+  // Closing note — the proposal is not a certification
+  d.ensureSpace(20)
+  d.rect(M.l, d.y, CW, 16, C.proposedBg, C.proposed)
+  d.rect(M.l, d.y, 3, 16, C.proposed)
+  d.text('NEXT STEPS', M.l + 6, d.y + 5, { size: 7.5, bold: true, color: C.proposed })
+  d.doc.setFontSize(7)
+  d.doc.setFont('helvetica', 'normal')
+  d.setTextColor(C.slate700)
+  const note = d.doc.splitTextToSize(
+    'On acceptance, the proposed items above are to be installed to the manufacturer’s specification, ' +
+    'load tested where required, and certified under an Installation & Verification report before the ' +
+    'system is used. Substrate suitability is to be confirmed on site prior to installation.',
+    CW - 10
+  )
+  d.doc.text(note, M.l + 6, d.y + 9)
+  d.y += 20
 }
 
 // ─── Site Layout page ─────────────────────────────────────────
@@ -876,19 +1011,24 @@ function drawSignOffPage(d: PDFDrawer, data: ReportData) {
   d.doc.addPage()
   d.y = 14
 
-  const { inspection } = data
-  const nextDue = inspection.next_recertification_due
-    ? format(parseISO(inspection.next_recertification_due), 'dd/MM/yyyy')
-    : format(addYears(parseISO(inspection.date_of_inspection), 1), 'dd/MM/yyyy')
+  const { inspection, reportType } = data
+  // A proposal has no installed system to schedule a recertification for —
+  // the clock only starts once the proposed items are installed.
+  const nextDue = reportType.isProposal
+    ? '12 months from installation'
+    : inspection.next_recertification_due
+      ? format(parseISO(inspection.next_recertification_due), 'dd/MM/yyyy')
+      : format(addYears(parseISO(inspection.date_of_inspection), 1), 'dd/MM/yyyy')
 
-  drawSectionHeading(d, 'Inspector Sign-Off')
+  drawSectionHeading(d, reportType.isProposal ? 'Prepared By' : 'Inspector Sign-Off')
 
   const rows: [string, string][] = [
-    ['Inspector Name',           data.certifier?.full_name ?? '—'],
-    ['Date of Sign-Off',         inspection.inspector_sign_off_date
-      ? format(parseISO(inspection.inspector_sign_off_date), 'dd/MM/yyyy')
-      : format(new Date(), 'dd/MM/yyyy')],
-    ['Next Recertification Due', nextDue],
+    [reportType.isProposal ? 'Prepared By' : 'Inspector Name', data.certifier?.full_name ?? '—'],
+    [reportType.isProposal ? 'Date Prepared' : 'Date of Sign-Off',
+      inspection.inspector_sign_off_date
+        ? format(parseISO(inspection.inspector_sign_off_date), 'dd/MM/yyyy')
+        : format(new Date(), 'dd/MM/yyyy')],
+    [reportType.nextDateLabel,   nextDue],
     ['Report Issued To',         inspection.report_issued_to ?? inspection.client_name],
   ]
 
@@ -901,7 +1041,8 @@ function drawSignOffPage(d: PDFDrawer, data: ReportData) {
   // Signature box
   d.gap(4)
   d.rect(M.l, d.y, CW, 22, C.slate50, C.slate200)
-  d.text('INSPECTOR SIGNATURE', M.l + 2, d.y + 4.5, { size: 6.5, bold: true, color: C.slate400 })
+  d.text(reportType.isProposal ? 'SIGNATURE' : 'INSPECTOR SIGNATURE',
+    M.l + 2, d.y + 4.5, { size: 6.5, bold: true, color: C.slate400 })
   if (data.signatureB64) {
     try {
       d.doc.addImage(data.signatureB64, 'PNG', M.l + 2, d.y + 2, 70, 18, undefined, 'FAST')
@@ -911,12 +1052,17 @@ function drawSignOffPage(d: PDFDrawer, data: ReportData) {
 
   // ── Disclaimer ──────────────────────────────────────────────
   d.gap(6)
-  d.ensureSpace(40)
-  d.rect(M.l, d.y, CW, 36, [240, 244, 255], C.navy)
-  d.rect(M.l, d.y, 3, 36, C.navy)
-  d.text('DISCLAIMER', M.l + 5, d.y + 6, { size: 8, bold: true, color: C.navy })
 
-  const disclaimer =
+  const proposalDisclaimer =
+    'This document is a proposal for a height safety installation and is NOT a certification. None of the items ' +
+    'described have been installed, load tested or certified at the date of this document, and no compliance ' +
+    'status is expressed or implied for any of them. Proposed positions and quantities are subject to on-site ' +
+    'verification of the substrate and may change during installation. The system must not be used until it has ' +
+    'been installed, commissioned and certified. This document has been prepared for the exclusive use of the ' +
+    'client named above and must not be reproduced, distributed, or relied upon by any third party without the ' +
+    'written consent of Abseal Pty Ltd.'
+
+  const disclaimer = reportType.isProposal ? proposalDisclaimer :
     'This report has been prepared for the exclusive use of the client named above and must not be reproduced, ' +
     'distributed, or relied upon by any third party without the written consent of Abseal Pty Ltd. ' +
     'This report reflects conditions at the time of inspection only. Abseal Pty Ltd accepts no liability ' +
@@ -927,10 +1073,20 @@ function drawSignOffPage(d: PDFDrawer, data: ReportData) {
 
   d.doc.setFontSize(7.5)
   d.doc.setFont('helvetica', 'normal')
-  d.setTextColor(C.slate700)
   const disclaimerLines = d.doc.splitTextToSize(disclaimer, CW - 10)
+  const discH = disclaimerLines.length * 3.4 + 12
+
+  d.ensureSpace(discH + 4)
+  const discAccent = reportType.isProposal ? C.proposed : C.navy
+  d.rect(M.l, d.y, CW, discH, reportType.isProposal ? C.proposedBg : [240, 244, 255], discAccent)
+  d.rect(M.l, d.y, 3, discH, discAccent)
+  d.text('DISCLAIMER', M.l + 5, d.y + 6, { size: 8, bold: true, color: discAccent })
+
+  d.doc.setFontSize(7.5)
+  d.doc.setFont('helvetica', 'normal')
+  d.setTextColor(C.slate700)
   d.doc.text(disclaimerLines, M.l + 5, d.y + 13)
-  d.y += 40
+  d.y += discH + 4
 
   // ── Company contact footer block ─────────────────────────────
   d.gap(6)
@@ -994,6 +1150,11 @@ export async function generateAndDownloadReport(
   onProgress?.(70, 'Drawing recommendations summary…')
   drawRecommendationsSummary(drawer, data)
 
+  if (data.reportType.isProposal) {
+    onProgress?.(75, 'Drawing proposed installation schedule…')
+    drawProposedScheduleSummary(drawer, data)
+  }
+
   onProgress?.(80, 'Drawing site layout…')
   await drawSiteLayoutPage(drawer, data)
 
@@ -1013,7 +1174,7 @@ export async function generateAndDownloadReport(
 
   const datePart = format(parseISO(data.inspection.date_of_inspection), 'yyyyMMdd')
   const sitePart = data.inspection.site_name.replace(/[^a-z0-9]/gi, '_').slice(0, 30)
-  const filename = `Abseal_Recertification_${sitePart}_${datePart}.pdf`
+  const filename = `Abseal_${data.reportType.filenameStem}_${sitePart}_${datePart}.pdf`
 
   doc.save(filename)
   onProgress?.(100, 'Done!')
@@ -1045,6 +1206,7 @@ export async function generateAndUploadReport(
   }
 
   drawRecommendationsSummary(drawer, data)
+  if (data.reportType.isProposal) drawProposedScheduleSummary(drawer, data)
   await drawSiteLayoutPage(drawer, data)
   drawSignOffPage(drawer, data)
 
@@ -1058,7 +1220,7 @@ export async function generateAndUploadReport(
 
   const datePart = format(parseISO(data.inspection.date_of_inspection), 'yyyyMMdd')
   const sitePart = data.inspection.site_name.replace(/[^a-z0-9]/gi, '_').slice(0, 30)
-  const filename = `Abseal_Recertification_${sitePart}_${datePart}.pdf`
+  const filename = `Abseal_${data.reportType.filenameStem}_${sitePart}_${datePart}.pdf`
   const storagePath = `reports/${inspectionId}/${filename}`
 
   const blob = doc.output('blob')

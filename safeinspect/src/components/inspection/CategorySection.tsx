@@ -1,7 +1,7 @@
 import { useState, useRef, useCallback } from 'react'
 import {
   ChevronDown, Plus, CheckCircle2, XCircle, AlertCircle,
-  MinusCircle, Layers,
+  MinusCircle, Layers, PencilRuler,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useInspectionStore } from '@/store/inspection.store'
@@ -24,12 +24,13 @@ const CATEGORY_ICONS: Partial<Record<AssetCategory, string>> = {
 
 // ─── Mini stats pill ──────────────────────────────────────────
 
-function StatPill({ count, type }: { count: number; type: 'compliant' | 'non_compliant' | 'recommendation' | 'na' }) {
+function StatPill({ count, type }: { count: number; type: 'compliant' | 'non_compliant' | 'recommendation' | 'proposed' | 'na' }) {
   if (count === 0) return null
   const configs = {
     compliant:      { icon: CheckCircle2, color: 'text-status-compliant',     bg: 'bg-status-compliant-bg'     },
     non_compliant:  { icon: XCircle,      color: 'text-status-noncompliant',  bg: 'bg-status-noncompliant-bg'  },
     recommendation: { icon: AlertCircle,  color: 'text-status-recommendation', bg: 'bg-status-recommendation-bg'},
+    proposed:       { icon: PencilRuler,  color: 'text-status-proposed',      bg: 'bg-status-proposed-bg'      },
     na:             { icon: MinusCircle,  color: 'text-status-na',            bg: 'bg-status-na-bg'            },
   }
   const { icon: Icon, color, bg } = configs[type]
@@ -71,6 +72,7 @@ export function CategorySection({
     compliant:      assets.filter((a) => a.status === 'compliant').length,
     non_compliant:  assets.filter((a) => a.status === 'non_compliant').length,
     recommendation: assets.filter((a) => a.status === 'recommendation').length,
+    proposed:       assets.filter((a) => a.status === 'proposed').length,
     na:             assets.filter((a) => a.status === 'n/a').length,
   }
 
@@ -80,6 +82,7 @@ export function CategorySection({
   const headerAccent =
     stats.non_compliant > 0  ? 'border-l-status-noncompliant' :
     stats.recommendation > 0 ? 'border-l-status-recommendation' :
+    stats.proposed > 0        ? 'border-l-status-proposed' :
     stats.total > 0           ? 'border-l-status-compliant' :
                                 'border-l-surface-border'
 
@@ -141,6 +144,7 @@ export function CategorySection({
               <StatPill count={stats.compliant}      type="compliant"      />
               <StatPill count={stats.non_compliant}  type="non_compliant"  />
               <StatPill count={stats.recommendation} type="recommendation" />
+              <StatPill count={stats.proposed}       type="proposed"       />
               <StatPill count={stats.na}             type="na"             />
             </div>
           ) : (
