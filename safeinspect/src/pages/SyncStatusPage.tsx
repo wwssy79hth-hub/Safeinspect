@@ -25,6 +25,7 @@ const OP_ICONS: Record<QueuedOpType, typeof CloudUpload> = {
   delete_asset: Trash2,
   update_inspection: FileEdit,
   save_markers: MapPin,
+  save_plan_features: MapPin,
   upload_photo: Camera,
 }
 

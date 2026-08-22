@@ -306,7 +306,7 @@ export function AssetItemForm({
 }: AssetItemFormProps) {
   const user = useAuthStore((s) => s.user)
   const {
-    upsertAsset, deleteAsset, getNextAssetCode, saving, updateMarker, sitePlan,
+    upsertAsset, deleteAsset, getNextAssetCode, saving, updateFeature, planFeatures,
     activeInspection,
   } = useInspectionStore()
 
@@ -375,8 +375,8 @@ export function AssetItemForm({
   // Status → instantly sync map marker pin colour
   useEffect(() => {
     if (!form.asset_code) return
-    const marker = sitePlan.markers.find((m) => m.asset_code === form.asset_code)
-    if (marker) updateMarker(marker.id, { status: form.status })
+    const feature = planFeatures.find((f) => f.asset_code === form.asset_code)
+    if (feature) updateFeature(feature.id, { status: form.status })
   }, [form.status, form.asset_code]) // eslint-disable-line
 
   // Auto-clear priority when status doesn't need it

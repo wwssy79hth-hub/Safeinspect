@@ -27,8 +27,9 @@ import { supabase } from '@/lib/supabase'
 import { getPhoto, deletePhoto } from '@/lib/photoOutbox'
 import type { Database } from '@/types/database'
 
-type AssetUpsert     = Database['public']['Tables']['inspection_assets']['Insert']
-type InspectionUpdate = Database['public']['Tables']['inspections']['Update']
+type AssetUpsert       = Database['public']['Tables']['inspection_assets']['Insert']
+type InspectionUpdate  = Database['public']['Tables']['inspections']['Update']
+type PlanFeatureInsert = Database['public']['Tables']['plan_features']['Insert']
 
 // ─── Queue item shape ─────────────────────────────────────────
 
@@ -36,7 +37,8 @@ export type QueuedOpType =
   | 'upsert_asset'
   | 'delete_asset'
   | 'update_inspection'
-  | 'save_markers'
+  | 'save_markers'          // legacy notes-based markers (kept for queued ops from old clients)
+  | 'save_plan_features'
   | 'upload_photo'
 
 export interface QueuedOp {
@@ -103,6 +105,26 @@ async function executeOp(op: QueuedOp): Promise<void> {
         })
         .eq('id', id as string)
       if (error) throw error
+      break
+    }
+    case 'save_plan_features': {
+      const { upserts, deleteIds } = op.payload as unknown as {
+        upserts: PlanFeatureInsert[]
+        deleteIds: string[]
+      }
+      if (deleteIds?.length) {
+        const { error } = await supabase
+          .from('plan_features')
+          .delete()
+          .in('id', deleteIds)
+        if (error) throw error
+      }
+      if (upserts?.length) {
+        const { error } = await supabase
+          .from('plan_features')
+          .upsert(upserts)
+        if (error) throw error
+      }
       break
     }
     case 'upload_photo': {

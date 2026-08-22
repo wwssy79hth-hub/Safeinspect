@@ -1,11 +1,11 @@
 import { create } from 'zustand'
 import { devtools, persist } from 'zustand/middleware'
 import { supabase } from '@/lib/supabase'
+import { useSyncQueue, isOfflineError } from '@/lib/syncQueue'
 import { resolveStorageUrl } from '@/lib/storageUrls'
 import { defaultAssetStatusFor, isProposalReport } from '@/lib/reportTypes'
 import { DEFAULT_STANDARD } from '@/lib/inspection-data'
 import { findOrCreateSite } from '@/lib/registry'
-import { useSyncQueue, isOfflineError } from '@/lib/syncQueue'
 import type {
   Inspection,
   InspectionAsset,
@@ -13,26 +13,27 @@ import type {
   AssetStatus,
   IssueType,
   OverallSiteStatus,
+  SitePlan,
+  PlanFeature,
+  PlanGeometryType,
+  PlanPoint,
 } from '@/types/database'
 
-// ─── Site map marker ─────────────────────────────────────────
-// Stored as a JSON column on the inspection row (or a separate table)
+// ─── Plan features ───────────────────────────────────────────
+// Persisted in site_plans / plan_features tables. Geometry is
+// image-normalised (0–1) so it renders identically at any zoom,
+// on any device, and in the PDF export.
 
-export interface SiteMapMarker {
-  id: string               // UUID
-  asset_code: string       // e.g. "TMAP-003" — links to inspection_assets.asset_code
-  x: number                // 0–100 (percentage of image width)
-  y: number                // 0–100 (percentage of image height)
-  status: AssetStatus      // drives pin colour
+export type NewPlanFeature = {
+  site_plan_id: string
+  inspection_id: string
+  asset_id?: string | null
+  asset_code: string
   category: AssetCategory
-  label: string            // short display label
-}
-
-export interface SitePlanData {
-  image_url: string | null          // Supabase Storage public URL
-  image_path: string | null         // Storage path for deletion
-  markers: SiteMapMarker[]
-  drawing_scaled: boolean
+  status: AssetStatus
+  geometry_type: PlanGeometryType
+  geometry: PlanPoint[]
+  label?: string | null
 }
 
 // ─── Draft shape ─────────────────────────────────────────────
@@ -77,8 +78,11 @@ interface InspectionState {
   assetsByCategory: Partial<Record<AssetCategory, InspectionAsset[]>>
 
   // Site plan / map
-  sitePlan: SitePlanData
-  siteMapDirty: boolean   // true when markers unsaved
+  sitePlans: SitePlan[]
+  activePlanId: string | null
+  planFeatures: PlanFeature[]          // all features for the inspection
+  deletedFeatureIds: string[]          // persisted rows pending deletion
+  siteMapDirty: boolean                // true when features unsaved
 
   inspections: Inspection[]
   inspectionsLoading: boolean
@@ -116,13 +120,15 @@ interface InspectionState {
   deleteAsset: (assetId: string) => Promise<void>
 
   // ── Site map ─────────────────────────────────────────────────
-  loadSitePlan: (inspectionId: string) => Promise<void>
-  uploadSitePlanImage: (inspectionId: string, file: File) => Promise<string>
-  addMarker: (marker: Omit<SiteMapMarker, 'id'>) => void
-  updateMarker: (id: string, patch: Partial<SiteMapMarker>) => void
-  removeMarker: (id: string) => void
-  syncMarkersFromAssets: () => void   // auto-create markers for all known assets
-  saveMarkers: (inspectionId: string) => Promise<void>
+  loadSitePlans: (inspectionId: string) => Promise<void>
+  setActivePlan: (planId: string) => void
+  createSitePlan: (inspectionId: string, name: string) => Promise<SitePlan>
+  uploadSitePlanImage: (inspectionId: string, file: File, planId?: string) => Promise<string>
+  addFeature: (feature: NewPlanFeature) => PlanFeature
+  updateFeature: (id: string, patch: Partial<PlanFeature>) => void
+  removeFeature: (id: string) => void
+  syncFeaturesFromAssets: () => void   // auto-create point features for unplaced assets
+  saveFeatures: (inspectionId: string) => Promise<void>
 
   // ── List + stats ─────────────────────────────────────────────
   fetchInspections: (userId: string) => Promise<void>
@@ -159,12 +165,22 @@ const defaultDraft = (): InspectionDraft => ({
   selected_categories: [],
 })
 
-const defaultSitePlan = (): SitePlanData => ({
-  image_url: null,
-  image_path: null,
-  markers: [],
-  drawing_scaled: false,
-})
+/** Read an image file's natural pixel dimensions before upload. */
+async function readImageDimensions(file: File): Promise<{ width: number; height: number } | null> {
+  try {
+    const bmp = await createImageBitmap(file)
+    const dims = { width: bmp.width, height: bmp.height }
+    bmp.close()
+    return dims
+  } catch {
+    return null
+  }
+}
+
+const localTimestamps = () => {
+  const now = new Date().toISOString()
+  return { created_at: now, updated_at: now }
+}
 
 // ─── Store ────────────────────────────────────────────────────
 
@@ -177,7 +193,10 @@ export const useInspectionStore = create<InspectionState>()(
         draft: null,
         assets: [],
         assetsByCategory: {},
-        sitePlan: defaultSitePlan(),
+        sitePlans: [],
+        activePlanId: null,
+        planFeatures: [],
+        deletedFeatureIds: [],
         siteMapDirty: false,
         inspections: [],
         inspectionsLoading: false,
@@ -203,7 +222,10 @@ export const useInspectionStore = create<InspectionState>()(
             activeInspection: null,
             assets: [],
             assetsByCategory: {},
-            sitePlan: defaultSitePlan(),
+            sitePlans: [],
+            activePlanId: null,
+            planFeatures: [],
+            deletedFeatureIds: [],
             siteMapDirty: false,
           }),
 
@@ -357,11 +379,13 @@ export const useInspectionStore = create<InspectionState>()(
             }
             set({ assets: updated, assetsByCategory: byCategory })
 
-            // Auto-sync marker status if one exists for this asset code
-            const markers = get().sitePlan.markers
-            const existingMarker = markers.find((m) => m.asset_code === row.asset_code)
-            if (existingMarker) {
-              get().updateMarker(existingMarker.id, { status: row.status as AssetStatus })
+            // Auto-sync feature status if one exists for this asset code
+            const feature = get().planFeatures.find((f) => f.asset_code === row.asset_code)
+            if (feature && feature.status !== row.status) {
+              get().updateFeature(feature.id, {
+                status: row.status as AssetStatus,
+                asset_id: row.id,
+              })
             }
           }
 
@@ -443,67 +467,151 @@ export const useInspectionStore = create<InspectionState>()(
 
         // ── Site map ─────────────────────────────────────────
 
-        loadSitePlan: async (inspectionId) => {
+        loadSitePlans: async (inspectionId) => {
           try {
-            const { data, error } = await supabase
-              .from('inspections')
-              .select('aerial_map_url, drawing_scaled, notes')
-              .eq('id', inspectionId)
-              .single()
-            if (error) throw error
+            const [plansRes, featuresRes] = await Promise.all([
+              supabase
+                .from('site_plans')
+                .select('*')
+                .eq('inspection_id', inspectionId)
+                .order('sort_order', { ascending: true }),
+              supabase
+                .from('plan_features')
+                .select('*')
+                .eq('inspection_id', inspectionId)
+                .order('sort_order', { ascending: true }),
+            ])
+            if (plansRes.error) throw plansRes.error
+            if (featuresRes.error) throw featuresRes.error
 
-            // markers are stored in the notes field as JSON prefix "MARKERS:" for MVP
-            // Production: use a dedicated site_plan_markers table
-            let markers: SiteMapMarker[] = []
-            if (data.notes?.startsWith('MARKERS:')) {
-              try {
-                markers = JSON.parse(data.notes.slice(8))
-              } catch { /* ignore corrupt */ }
+            let plans = plansRes.data as SitePlan[]
+
+            // Inspections created before this feature: promote the legacy
+            // aerial_map_url into a proper site_plans row on first open.
+            if (plans.length === 0) {
+              const insp = get().activeInspection
+              const aerialUrl = insp?.id === inspectionId ? insp.aerial_map_url : null
+              if (aerialUrl) {
+                const { data: created, error: createErr } = await supabase
+                  .from('site_plans')
+                  .insert({
+                    inspection_id: inspectionId,
+                    name: insp?.roof_area_reference || 'Roof 01',
+                    image_url: aerialUrl,
+                    drawing_scaled: insp?.drawing_scaled ?? false,
+                  })
+                  .select()
+                  .single()
+                if (!createErr && created) plans = [created as SitePlan]
+              }
             }
 
-            // Stored value is a storage path (or a legacy URL) —
-            // resolve to a signed URL for display.
-            const imageUrl = await resolveStorageUrl('aerial-maps', data.aerial_map_url)
+            // Buckets are private: resolve stored paths (or legacy
+            // URLs) to signed display URLs before handing to the UI.
+            const resolved = await Promise.all(
+              plans.map(async (p) => ({
+                ...p,
+                image_url: await resolveStorageUrl('aerial-maps', p.image_path ?? p.image_url),
+              }))
+            )
 
-            set({
-              sitePlan: {
-                image_url: imageUrl,
-                image_path: data.aerial_map_url,
-                markers,
-                drawing_scaled: data.drawing_scaled ?? false,
-              },
+            set((s) => ({
+              sitePlans: resolved,
+              planFeatures: featuresRes.data as PlanFeature[],
+              deletedFeatureIds: [],
+              activePlanId:
+                resolved.find((p) => p.id === s.activePlanId)?.id ?? resolved[0]?.id ?? null,
               siteMapDirty: false,
-            })
+            }))
           } catch (err) {
-            const msg = err instanceof Error ? err.message : 'Failed to load site plan'
+            const msg = err instanceof Error ? err.message : 'Failed to load site plans'
             set({ error: msg })
           }
         },
 
-        uploadSitePlanImage: async (inspectionId, file) => {
+        setActivePlan: (planId) => set({ activePlanId: planId }),
+
+        createSitePlan: async (inspectionId, name) => {
           set({ saving: true, error: null })
           try {
+            const { data, error } = await supabase
+              .from('site_plans')
+              .insert({
+                inspection_id: inspectionId,
+                name,
+                sort_order: get().sitePlans.length,
+              })
+              .select()
+              .single()
+            if (error) throw error
+            const plan = data as SitePlan
+            set((s) => ({ sitePlans: [...s.sitePlans, plan], activePlanId: plan.id }))
+            return plan
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : 'Failed to create site plan'
+            set({ error: msg })
+            throw err
+          } finally {
+            set({ saving: false })
+          }
+        },
+
+        uploadSitePlanImage: async (inspectionId, file, planId) => {
+          set({ saving: true, error: null })
+          try {
+            // Resolve target plan — create the default one if none exists yet
+            let plan = get().sitePlans.find((p) => p.id === (planId ?? get().activePlanId))
+            if (!plan) {
+              const { data, error } = await supabase
+                .from('site_plans')
+                .insert({ inspection_id: inspectionId, name: 'Roof 01' })
+                .select()
+                .single()
+              if (error) throw error
+              plan = data as SitePlan
+              set((s) => ({ sitePlans: [...s.sitePlans, plan!], activePlanId: plan!.id }))
+            }
+
+            const dims = await readImageDimensions(file)
             const ext = file.name.split('.').pop() ?? 'jpg'
-            const path = `${inspectionId}/site-plan.${ext}`
+            const path = `${inspectionId}/${plan.id}.${ext}`
             const { error: uploadErr } = await supabase.storage
               .from('aerial-maps')
               .upload(path, file, { upsert: true, contentType: file.type })
             if (uploadErr) throw uploadErr
 
-            // The bucket is private: persist the path, display via a
-            // signed URL resolved at read time.
-            await supabase
-              .from('inspections')
-              .update({ aerial_map_url: path })
-              .eq('id', inspectionId)
+            // The bucket is private: persist the path; display goes
+            // through a short-lived signed URL resolved at read time.
+            const { data: updated, error: updateErr } = await supabase
+              .from('site_plans')
+              .update({
+                image_path: path,
+                image_url: null,
+                image_width: dims?.width ?? null,
+                image_height: dims?.height ?? null,
+              })
+              .eq('id', plan.id)
+              .select()
+              .single()
+            if (updateErr) throw updateErr
+
+            // Keep the legacy report field pointing at the first plan's image
+            const isFirstPlan = get().sitePlans[0]?.id === plan.id
+            if (isFirstPlan) {
+              await supabase
+                .from('inspections')
+                .update({ aerial_map_url: path })
+                .eq('id', inspectionId)
+            }
 
             const displayUrl = (await resolveStorageUrl('aerial-maps', path)) ?? ''
+            const localPlan = { ...(updated as SitePlan), image_url: displayUrl }
 
             set((s) => ({
-              sitePlan: { ...s.sitePlan, image_url: displayUrl, image_path: path },
-              activeInspection: s.activeInspection
+              sitePlans: s.sitePlans.map((p) => (p.id === plan!.id ? localPlan : p)),
+              activeInspection: isFirstPlan && s.activeInspection
                 ? { ...s.activeInspection, aerial_map_url: path }
-                : null,
+                : s.activeInspection,
             }))
 
             return displayUrl
@@ -516,95 +624,112 @@ export const useInspectionStore = create<InspectionState>()(
           }
         },
 
-        addMarker: (marker) => {
-          const id = crypto.randomUUID()
+        addFeature: (feature) => {
+          const row: PlanFeature = {
+            ...localTimestamps(),
+            ...feature,
+            id: crypto.randomUUID(),
+            asset_id: feature.asset_id ?? null,
+            label: feature.label ?? feature.asset_code,
+            label_offset: null,
+            sort_order: get().planFeatures.length,
+          }
           set((s) => ({
-            sitePlan: {
-              ...s.sitePlan,
-              markers: [...s.sitePlan.markers, { ...marker, id }],
-            },
+            planFeatures: [...s.planFeatures, row],
+            siteMapDirty: true,
+          }))
+          return row
+        },
+
+        updateFeature: (id, patch) => {
+          set((s) => ({
+            planFeatures: s.planFeatures.map((f) =>
+              f.id === id ? { ...f, ...patch } : f
+            ),
             siteMapDirty: true,
           }))
         },
 
-        updateMarker: (id, patch) => {
+        removeFeature: (id) => {
           set((s) => ({
-            sitePlan: {
-              ...s.sitePlan,
-              markers: s.sitePlan.markers.map((m) =>
-                m.id === id ? { ...m, ...patch } : m
-              ),
-            },
+            planFeatures: s.planFeatures.filter((f) => f.id !== id),
+            deletedFeatureIds: [...s.deletedFeatureIds, id],
             siteMapDirty: true,
           }))
         },
 
-        removeMarker: (id) => {
-          set((s) => ({
-            sitePlan: {
-              ...s.sitePlan,
-              markers: s.sitePlan.markers.filter((m) => m.id !== id),
-            },
-            siteMapDirty: true,
-          }))
-        },
-
-        syncMarkersFromAssets: () => {
-          const { assets, sitePlan } = get()
-          const existingCodes = new Set(sitePlan.markers.map((m) => m.asset_code))
-          const newMarkers: SiteMapMarker[] = []
+        syncFeaturesFromAssets: () => {
+          const { assets, planFeatures, activePlanId, activeInspectionId } = get()
+          if (!activePlanId || !activeInspectionId) return
+          const existingCodes = new Set(planFeatures.map((f) => f.asset_code))
+          const newFeatures: PlanFeature[] = []
 
           assets.forEach((asset, idx) => {
             if (!existingCodes.has(asset.asset_code)) {
-              // Place new markers in a grid — user can drag to correct position
-              newMarkers.push({
+              // Place new features in a grid — user drags them into position
+              newFeatures.push({
                 id: crypto.randomUUID(),
+                site_plan_id: activePlanId,
+                inspection_id: activeInspectionId,
+                asset_id: asset.id,
                 asset_code: asset.asset_code,
                 category: asset.category as AssetCategory,
                 status: asset.status as AssetStatus,
+                geometry_type: 'point',
+                geometry: [{
+                  x: ((idx % 10) * 0.09) + 0.05,
+                  y: (Math.floor(idx / 10) * 0.12) + 0.05,
+                }],
                 label: asset.asset_code,
-                x: ((idx % 10) * 9) + 5,
-                y: (Math.floor(idx / 10) * 12) + 5,
+                label_offset: null,
+                sort_order: planFeatures.length + idx,
+                ...localTimestamps(),
               })
             }
           })
 
-          if (newMarkers.length > 0) {
+          if (newFeatures.length > 0) {
             set((s) => ({
-              sitePlan: {
-                ...s.sitePlan,
-                markers: [...s.sitePlan.markers, ...newMarkers],
-              },
+              planFeatures: [...s.planFeatures, ...newFeatures],
               siteMapDirty: true,
             }))
           }
         },
 
-        saveMarkers: async (inspectionId) => {
-          const { sitePlan } = get()
+        saveFeatures: async (inspectionId) => {
+          const { planFeatures, deletedFeatureIds } = get()
           set({ saving: true, error: null })
+
+          const upserts = planFeatures
+            .filter((f) => f.inspection_id === inspectionId)
+            .map(({ created_at: _c, updated_at: _u, ...row }) => row)
+
           try {
-            const markersJson = 'MARKERS:' + JSON.stringify(sitePlan.markers)
-            const { error } = await supabase
-              .from('inspections')
-              .update({
-                notes: markersJson,
-                drawing_scaled: sitePlan.drawing_scaled,
-              })
-              .eq('id', inspectionId)
-            if (error) throw error
-            set({ siteMapDirty: false })
+            if (deletedFeatureIds.length > 0) {
+              const { error } = await supabase
+                .from('plan_features')
+                .delete()
+                .in('id', deletedFeatureIds)
+              if (error) throw error
+            }
+            if (upserts.length > 0) {
+              const { error } = await supabase
+                .from('plan_features')
+                .upsert(upserts)
+              if (error) throw error
+            }
+            set({ siteMapDirty: false, deletedFeatureIds: [] })
           } catch (err) {
             if (isOfflineError(err)) {
-              useSyncQueue.getState().enqueue('save_markers', 'Save site map markers', {
-                id: inspectionId,
-                notes: 'MARKERS:' + JSON.stringify(sitePlan.markers),
-                drawing_scaled: sitePlan.drawing_scaled,
+              // Connectivity failure: queue for replay, keep local state
+              useSyncQueue.getState().enqueue('save_plan_features', 'Save site plan features', {
+                upserts,
+                deleteIds: deletedFeatureIds,
               })
-              set({ siteMapDirty: false })
+              set({ siteMapDirty: false, deletedFeatureIds: [] })
               return
             }
-            const msg = err instanceof Error ? err.message : 'Failed to save markers'
+            const msg = err instanceof Error ? err.message : 'Failed to save site plan'
             set({ error: msg })
             throw err
           } finally {
@@ -715,7 +840,11 @@ export const useInspectionStore = create<InspectionState>()(
         partialize: (s) => ({
           draft: s.draft,
           activeInspectionId: s.activeInspectionId,
-          sitePlan: s.sitePlan,
+          sitePlans: s.sitePlans,
+          activePlanId: s.activePlanId,
+          planFeatures: s.planFeatures,
+          deletedFeatureIds: s.deletedFeatureIds,
+          siteMapDirty: s.siteMapDirty,
         }),
       }
     ),
