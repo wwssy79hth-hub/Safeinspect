@@ -93,6 +93,15 @@ function PhotoStrip(props: ReturnType<typeof usePhotoCapture>) {
                   <span className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
                 </div>
               )}
+              {/* Queued for offline sync */}
+              {photo.queued && (
+                <div
+                  className="absolute bottom-1.5 left-1.5 px-1.5 py-0.5 rounded bg-black/70 text-[9px] font-bold text-status-recommendation uppercase tracking-wide"
+                  title="Saved on this device — uploads when back online"
+                >
+                  Queued
+                </div>
+              )}
               {/* Error state */}
               {photo.error && (
                 <div className="absolute inset-0 bg-red-900/70 flex items-center justify-center" title={photo.error}>

@@ -5,6 +5,7 @@ import { resolveStorageUrl } from '@/lib/storageUrls'
 import { defaultAssetStatusFor, isProposalReport } from '@/lib/reportTypes'
 import { DEFAULT_STANDARD } from '@/lib/inspection-data'
 import { findOrCreateSite } from '@/lib/registry'
+import { useSyncQueue, isOfflineError } from '@/lib/syncQueue'
 import type {
   Inspection,
   InspectionAsset,
@@ -287,6 +288,15 @@ export const useInspectionStore = create<InspectionState>()(
               inspections: s.inspections.map((i) => (i.id === id ? data : i)),
             }))
           } catch (err) {
+            if (isOfflineError(err)) {
+              useSyncQueue.getState().enqueue('update_inspection', 'Update inspection details', { id, ...patch })
+              set((s) => ({
+                activeInspection: s.activeInspection && s.activeInspection.id === id
+                  ? { ...s.activeInspection, ...patch }
+                  : s.activeInspection,
+              }))
+              return
+            }
             const msg = err instanceof Error ? err.message : 'Failed to update inspection'
             set({ error: msg })
             throw err
@@ -320,25 +330,25 @@ export const useInspectionStore = create<InspectionState>()(
 
         upsertAsset: async (asset) => {
           set({ saving: true, error: null })
-          try {
-            const sortOrder = get().assetsByCategory[asset.category]?.length ?? 0
-            const payload = {
-              ...asset,
-              sort_order: asset.sort_order ?? sortOrder,
-              standard_referenced: asset.standard_referenced ?? DEFAULT_STANDARD,
-              photo_refs: asset.photo_refs ?? [],
-            }
-            const { data, error } = await supabase
-              .from('inspection_assets')
-              .upsert(payload)
-              .select()
-              .single()
-            if (error) throw error
+          // Client-generated id makes the save replayable from the
+          // outbox — a replay upserts on (inspection_id, asset_code)
+          // and lands on the same row.
+          const id = asset.id ?? crypto.randomUUID()
+          const sortOrder = get().assetsByCategory[asset.category]?.length ?? 0
+          const payload = {
+            ...asset,
+            id,
+            sort_order: asset.sort_order ?? sortOrder,
+            standard_referenced: asset.standard_referenced ?? DEFAULT_STANDARD,
+            photo_refs: asset.photo_refs ?? [],
+          }
+
+          const applyLocal = (row: InspectionAsset) => {
             const existing = get().assets
-            const idx = existing.findIndex((a) => a.id === data.id)
+            const idx = existing.findIndex((a) => a.id === row.id)
             const updated = idx >= 0
-              ? existing.map((a) => (a.id === data.id ? data : a))
-              : [...existing, data]
+              ? existing.map((a) => (a.id === row.id ? row : a))
+              : [...existing, row]
             const byCategory: Partial<Record<AssetCategory, InspectionAsset[]>> = {}
             for (const a of updated) {
               const cat = a.category as AssetCategory
@@ -349,12 +359,46 @@ export const useInspectionStore = create<InspectionState>()(
 
             // Auto-sync marker status if one exists for this asset code
             const markers = get().sitePlan.markers
-            const existingMarker = markers.find((m) => m.asset_code === data.asset_code)
+            const existingMarker = markers.find((m) => m.asset_code === row.asset_code)
             if (existingMarker) {
-              get().updateMarker(existingMarker.id, { status: data.status as AssetStatus })
+              get().updateMarker(existingMarker.id, { status: row.status as AssetStatus })
             }
+          }
+
+          try {
+            const { data, error } = await supabase
+              .from('inspection_assets')
+              .upsert(payload, { onConflict: 'inspection_id,asset_code' })
+              .select()
+              .single()
+            if (error) throw error
+            applyLocal(data)
             return data
           } catch (err) {
+            if (isOfflineError(err)) {
+              // Queue for replay and keep working locally
+              useSyncQueue.getState().enqueue(
+                'upsert_asset',
+                `Save ${payload.asset_code}`,
+                payload
+              )
+              const now = new Date().toISOString()
+              const local: InspectionAsset = {
+                location_on_site: null,
+                status: 'compliant',
+                priority: null,
+                finding: null,
+                corrective_action: null,
+                asset_id: null,
+                ...payload,
+                standard_referenced: payload.standard_referenced,
+                created_at: now,
+                updated_at: now,
+              } as InspectionAsset
+              applyLocal(local)
+              set({ saving: false })
+              return local
+            }
             const msg = err instanceof Error ? err.message : 'Failed to save asset'
             set({ error: msg })
             throw err
@@ -365,12 +409,7 @@ export const useInspectionStore = create<InspectionState>()(
 
         deleteAsset: async (assetId) => {
           set({ saving: true, error: null })
-          try {
-            const { error } = await supabase
-              .from('inspection_assets')
-              .delete()
-              .eq('id', assetId)
-            if (error) throw error
+          const applyLocal = () => {
             const updated = get().assets.filter((a) => a.id !== assetId)
             const byCategory: Partial<Record<AssetCategory, InspectionAsset[]>> = {}
             for (const a of updated) {
@@ -379,7 +418,21 @@ export const useInspectionStore = create<InspectionState>()(
               byCategory[cat]!.push(a)
             }
             set({ assets: updated, assetsByCategory: byCategory })
+          }
+          try {
+            const { error } = await supabase
+              .from('inspection_assets')
+              .delete()
+              .eq('id', assetId)
+            if (error) throw error
+            applyLocal()
           } catch (err) {
+            if (isOfflineError(err)) {
+              const code = get().assets.find((a) => a.id === assetId)?.asset_code ?? 'item'
+              useSyncQueue.getState().enqueue('delete_asset', `Delete ${code}`, { id: assetId })
+              applyLocal()
+              return
+            }
             const msg = err instanceof Error ? err.message : 'Failed to delete asset'
             set({ error: msg })
             throw err
@@ -542,6 +595,15 @@ export const useInspectionStore = create<InspectionState>()(
             if (error) throw error
             set({ siteMapDirty: false })
           } catch (err) {
+            if (isOfflineError(err)) {
+              useSyncQueue.getState().enqueue('save_markers', 'Save site map markers', {
+                id: inspectionId,
+                notes: 'MARKERS:' + JSON.stringify(sitePlan.markers),
+                drawing_scaled: sitePlan.drawing_scaled,
+              })
+              set({ siteMapDirty: false })
+              return
+            }
             const msg = err instanceof Error ? err.message : 'Failed to save markers'
             set({ error: msg })
             throw err
