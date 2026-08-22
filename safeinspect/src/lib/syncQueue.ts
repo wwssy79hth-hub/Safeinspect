@@ -10,8 +10,9 @@ import { devtools, persist } from 'zustand/middleware'
 import { supabase } from '@/lib/supabase'
 import type { Database } from '@/types/database'
 
-type AssetInsert      = Database['public']['Tables']['inspection_assets']['Insert']
-type InspectionUpdate = Database['public']['Tables']['inspections']['Update']
+type AssetInsert       = Database['public']['Tables']['inspection_assets']['Insert']
+type InspectionUpdate  = Database['public']['Tables']['inspections']['Update']
+type PlanFeatureInsert = Database['public']['Tables']['plan_features']['Insert']
 
 // ─── Queue item shape ─────────────────────────────────────────
 
@@ -19,7 +20,8 @@ export type QueuedOpType =
   | 'upsert_asset'
   | 'delete_asset'
   | 'update_inspection'
-  | 'save_markers'
+  | 'save_markers'          // legacy notes-based markers (kept for queued ops from old clients)
+  | 'save_plan_features'
   | 'upload_photo'
 
 export interface QueuedOp {
@@ -73,15 +75,36 @@ async function executeOp(op: QueuedOp): Promise<void> {
       break
     }
     case 'save_markers': {
-      const { id, notes, drawing_scaled } = op.payload
+      const { id, notes, drawing_scaled } = op.payload as {
+        id: string
+        notes: string | null
+        drawing_scaled: boolean | null
+      }
       const { error } = await supabase
         .from('inspections')
-        .update({
-          notes: notes as string | null,
-          drawing_scaled: drawing_scaled as boolean | null,
-        })
-        .eq('id', id as string)
+        .update({ notes, drawing_scaled })
+        .eq('id', id)
       if (error) throw error
+      break
+    }
+    case 'save_plan_features': {
+      const { upserts, deleteIds } = op.payload as {
+        upserts: PlanFeatureInsert[]
+        deleteIds: string[]
+      }
+      if (deleteIds?.length) {
+        const { error } = await supabase
+          .from('plan_features')
+          .delete()
+          .in('id', deleteIds)
+        if (error) throw error
+      }
+      if (upserts?.length) {
+        const { error } = await supabase
+          .from('plan_features')
+          .upsert(upserts)
+        if (error) throw error
+      }
       break
     }
     case 'upload_photo': {

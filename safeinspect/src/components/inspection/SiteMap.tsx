@@ -1,125 +1,71 @@
+// ============================================================
+// SafeInspect — Site Map
+// Aerial/plan canvas with a single SVG overlay locked to the
+// image (viewBox = natural pixels), so features stay glued to
+// the imagery at every zoom — like a scaled drawing.
+// Supports point assets, polyline assets (static lines,
+// guardrails, walkways), pinch zoom, zoom-to-cursor, and
+// tap-to-place capture in the field.
+// ============================================================
+
 import {
-  useState, useRef, useCallback, useEffect, type MouseEvent, type TouchEvent,
+  useState, useRef, useCallback, useEffect, useMemo,
+  type PointerEvent as ReactPointerEvent,
 } from 'react'
 import {
-  Upload, ZoomIn, ZoomOut, RotateCcw, Save, MapPin, X,
-  Link2, CheckCircle2, XCircle, AlertCircle, MinusCircle,
-  Info, Layers, Eye, EyeOff, ChevronDown, ChevronUp, ImageIcon, PencilRuler,
+  Upload, ZoomIn, ZoomOut, RotateCcw, Save, MapPin, X, Plus,
+  Link2, Eye, EyeOff, ChevronDown, ChevronUp, ImageIcon, Layers,
+  Check, Undo2, Spline,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { useInspectionStore } from '@/store/inspection.store'
 import {
-  useInspectionStore, type SiteMapMarker,
-} from '@/store/inspection.store'
-import { ASSET_CATEGORY_LABELS, type AssetCategory, type AssetStatus } from '@/types/database'
+  ASSET_CATEGORY_LABELS,
+  type AssetCategory, type AssetStatus, type PlanFeature, type PlanPoint,
+} from '@/types/database'
+import {
+  PointSymbol, LineSymbol, FeatureLabel,
+  STATUS_COLORS, LINE_CATEGORIES,
+} from './map/symbols'
 
-// ─── Pin colour system (matches the Anchor Safe PDF exactly) ──
+// ─── Types ────────────────────────────────────────────────────
 
-const PIN_CONFIG: Record<AssetStatus, {
-  bg: string; border: string; text: string; label: string; icon: typeof CheckCircle2
-}> = {
-  compliant:      { bg: '#16a34a', border: '#15803d', text: '#fff', label: 'Compliant',      icon: CheckCircle2 },
-  non_compliant:  { bg: '#dc2626', border: '#b91c1c', text: '#fff', label: 'Non-Compliant',  icon: XCircle     },
-  recommendation: { bg: '#d97706', border: '#b45309', text: '#fff', label: 'Recommendation', icon: AlertCircle },
-  proposed:       { bg: '#2563eb', border: '#1d4ed8', text: '#fff', label: 'Proposed',       icon: PencilRuler },
-  'n/a':          { bg: '#475569', border: '#334155', text: '#fff', label: 'N/A',             icon: MinusCircle },
-}
-
-// ─── Unplaced marker (floating palette) ───────────────────────
-
-interface PendingMarker {
+interface PendingPlacement {
+  asset_id: string | null
   asset_code: string
   category: AssetCategory
   status: AssetStatus
+  mode: 'point' | 'polyline'
 }
-
-// ─── Props ────────────────────────────────────────────────────
 
 interface SiteMapProps {
   inspectionId: string
-  /** Called when user clicks a marker — parent can scroll to asset form */
+  /** Called when user opens a feature — parent can scroll to asset form */
   onMarkerClick?: (assetCode: string) => void
   /** If true, hides editing controls (read-only for reports) */
   readOnly?: boolean
 }
 
-// ─── Pin SVG component ────────────────────────────────────────
+const TAP_THRESHOLD_PX = 8
+const MIN_ZOOM = 0.5
+const MAX_ZOOM = 12
 
-function Pin({
-  marker, selected, onClick, onDragStart, readOnly,
-}: {
-  marker: SiteMapMarker
-  selected: boolean
-  onClick: () => void
-  onDragStart?: (e: React.DragEvent, id: string) => void
-  readOnly?: boolean
-}) {
-  const cfg = PIN_CONFIG[marker.status]
-
-  return (
-    <div
-      role="button"
-      aria-label={marker.asset_code}
-      draggable={!readOnly}
-      onClick={(e) => { e.stopPropagation(); onClick() }}
-      onDragStart={(e) => onDragStart?.(e, marker.id)}
-      className={cn(
-        'absolute flex flex-col items-center cursor-pointer select-none transition-transform duration-100',
-        selected ? 'z-30 scale-125' : 'z-20 hover:scale-110',
-        !readOnly && 'active:scale-95'
-      )}
-      style={{
-        left: `${marker.x}%`,
-        top: `${marker.y}%`,
-        transform: 'translate(-50%, -100%)',
-      }}
-    >
-      {/* Label bubble */}
-      <div
-        className={cn(
-          'px-1.5 py-0.5 rounded-md text-[9px] font-bold font-mono whitespace-nowrap shadow-lg mb-0.5',
-          'border',
-          selected ? 'ring-2 ring-white/50' : ''
-        )}
-        style={{
-          backgroundColor: cfg.bg,
-          borderColor: cfg.border,
-          color: cfg.text,
-        }}
-      >
-        {marker.asset_code}
-      </div>
-
-      {/* Pin needle */}
-      <div
-        className="w-2 h-2 rounded-full border-2 border-white shadow-md"
-        style={{ backgroundColor: cfg.bg }}
-      />
-    </div>
-  )
-}
+const clamp01 = (v: number) => Math.max(0, Math.min(1, v))
 
 // ─── Legend panel ─────────────────────────────────────────────
 
-function MapLegend({ markers }: { markers: SiteMapMarker[] }) {
+function MapLegend({ features }: { features: PlanFeature[] }) {
   const [collapsed, setCollapsed] = useState(false)
 
-  // Group by category
-  const byCat = markers.reduce<Partial<Record<AssetCategory, number>>>((acc, m) => {
-    acc[m.category] = (acc[m.category] ?? 0) + 1
+  const byCat = features.reduce<Partial<Record<AssetCategory, number>>>((acc, f) => {
+    acc[f.category] = (acc[f.category] ?? 0) + 1
     return acc
   }, {})
 
-  const counts = {
-    compliant:      markers.filter((m) => m.status === 'compliant').length,
-    non_compliant:  markers.filter((m) => m.status === 'non_compliant').length,
-    recommendation: markers.filter((m) => m.status === 'recommendation').length,
-    proposed:       markers.filter((m) => m.status === 'proposed').length,
-    'n/a':          markers.filter((m) => m.status === 'n/a').length,
-  }
+  const statuses = Object.keys(STATUS_COLORS) as AssetStatus[]
 
   return (
     <div className="absolute top-2 right-2 z-30 bg-surface-base/95 backdrop-blur-sm border border-surface-border rounded-xl shadow-xl max-w-[180px] overflow-hidden">
-      {/* Header */}
       <button
         onClick={() => setCollapsed((c) => !c)}
         className="w-full flex items-center justify-between px-3 py-2 border-b border-surface-border"
@@ -130,33 +76,26 @@ function MapLegend({ markers }: { markers: SiteMapMarker[] }) {
 
       {!collapsed && (
         <div className="p-2 space-y-1">
-          {/* Status counts */}
-          {(Object.entries(PIN_CONFIG) as [AssetStatus, typeof PIN_CONFIG[AssetStatus]][]).map(([status, cfg]) => {
-            const count = counts[status]
+          {statuses.map((status) => {
+            const count = features.filter((f) => f.status === status).length
             if (count === 0) return null
-            const Icon = cfg.icon
+            const c = STATUS_COLORS[status]
             return (
               <div key={status} className="flex items-center gap-2">
-                <div
-                  className="w-4 h-4 rounded flex items-center justify-center shrink-0"
-                  style={{ backgroundColor: cfg.bg }}
-                >
-                  <Icon size={9} color="white" />
-                </div>
-                <span className="text-slate-300 text-[10px] flex-1">{cfg.label}</span>
+                <div className="w-4 h-4 rounded shrink-0" style={{ backgroundColor: c.bg }} />
+                <span className="text-slate-300 text-[10px] flex-1">{c.label}</span>
                 <span className="text-slate-500 text-[10px] font-mono">{count}</span>
               </div>
             )
           })}
 
-          {/* Divider */}
           {Object.keys(byCat).length > 0 && (
             <>
               <div className="border-t border-surface-border my-1.5" />
               <p className="text-slate-600 text-[9px] uppercase tracking-wider font-semibold mb-1">By Category</p>
               {(Object.entries(byCat) as [AssetCategory, number][]).map(([cat, count]) => (
                 <div key={cat} className="flex items-center justify-between">
-                  <span className="text-slate-400 text-[10px] truncate">{cat}</span>
+                  <span className="text-slate-400 text-[10px] truncate">{ASSET_CATEGORY_LABELS[cat]}</span>
                   <span className="text-slate-500 text-[10px] font-mono ml-2">{count}</span>
                 </div>
               ))}
@@ -168,56 +107,40 @@ function MapLegend({ markers }: { markers: SiteMapMarker[] }) {
   )
 }
 
-// ─── Marker tooltip ───────────────────────────────────────────
+// ─── Selected feature panel ───────────────────────────────────
 
-function MarkerTooltip({
-  marker, onLink, onRemove, onClose, readOnly,
+function FeaturePanel({
+  feature, onOpen, onRemove, onClose, readOnly,
 }: {
-  marker: SiteMapMarker
-  onLink: () => void
+  feature: PlanFeature
+  onOpen: () => void
   onRemove: () => void
   onClose: () => void
   readOnly?: boolean
 }) {
-  const cfg = PIN_CONFIG[marker.status]
-  const Icon = cfg.icon
-
+  const c = STATUS_COLORS[feature.status]
   return (
-    <div
-      className="absolute z-40 bg-surface-raised border border-surface-border rounded-xl shadow-2xl p-3 min-w-[200px]"
-      style={{ left: `${marker.x}%`, top: `${marker.y}%`, transform: 'translate(-50%, -110%)' }}
-      onClick={(e) => e.stopPropagation()}
-    >
-      {/* Arrow */}
-      <div className="absolute left-1/2 -translate-x-1/2 -bottom-2 w-4 h-2 overflow-hidden">
-        <div className="w-3 h-3 bg-surface-raised border-r border-b border-surface-border rotate-45 translate-x-0.5 -translate-y-1.5" />
-      </div>
-
-      {/* Header */}
-      <div className="flex items-center justify-between gap-2 mb-2">
+    <div className="absolute bottom-3 left-1/2 -translate-x-1/2 z-40 bg-surface-raised border border-surface-border rounded-xl shadow-2xl p-3 min-w-[240px] max-w-[90%]">
+      <div className="flex items-center justify-between gap-2 mb-1.5">
         <div className="flex items-center gap-1.5">
-          <div
-            className="w-5 h-5 rounded flex items-center justify-center"
-            style={{ backgroundColor: cfg.bg }}
-          >
-            <Icon size={11} color="white" />
-          </div>
-          <span className="text-white text-sm font-bold font-mono">{marker.asset_code}</span>
+          <div className="w-4 h-4 rounded" style={{ backgroundColor: c.bg }} />
+          <span className="text-white text-sm font-bold font-mono">{feature.label ?? feature.asset_code}</span>
         </div>
         <button onClick={onClose} className="text-slate-500 hover:text-white transition-colors">
           <X size={14} />
         </button>
       </div>
-
       <p className="text-slate-400 text-xs mb-2">
-        {ASSET_CATEGORY_LABELS[marker.category]} ·{' '}
-        <span style={{ color: cfg.bg }}>{cfg.label}</span>
+        {ASSET_CATEGORY_LABELS[feature.category]} ·{' '}
+        <span style={{ color: c.bg }}>{c.label}</span>
+        {feature.geometry_type !== 'point' && (
+          <span className="text-slate-500"> · {feature.geometry.length} vertices</span>
+        )}
       </p>
-
       {!readOnly && (
         <div className="flex gap-2">
           <button
-            onClick={onLink}
+            onClick={onOpen}
             className="flex-1 flex items-center justify-center gap-1.5 h-8 rounded-lg bg-brand-orange/10 border border-brand-orange/30 text-brand-orange text-xs font-medium hover:bg-brand-orange/20 transition-colors"
           >
             <Link2 size={12} />
@@ -235,124 +158,412 @@ function MarkerTooltip({
   )
 }
 
-// ─── Main SiteMap component ───────────────────────────────────
+// ─── Main component ───────────────────────────────────────────
 
 export function SiteMap({ inspectionId, onMarkerClick, readOnly = false }: SiteMapProps) {
   const {
-    sitePlan, saving, siteMapDirty,
-    addMarker, updateMarker, removeMarker, saveMarkers,
-    uploadSitePlanImage, syncMarkersFromAssets,
+    sitePlans, activePlanId, planFeatures, saving, siteMapDirty,
+    setActivePlan, createSitePlan, uploadSitePlanImage,
+    addFeature, updateFeature, removeFeature, saveFeatures,
+    syncFeaturesFromAssets,
     assets,
   } = useInspectionStore()
 
+  const activePlan = sitePlans.find((p) => p.id === activePlanId) ?? sitePlans[0] ?? null
+  const features = useMemo(
+    () => (activePlan ? planFeatures.filter((f) => f.site_plan_id === activePlan.id) : []),
+    [planFeatures, activePlan]
+  )
+
   const containerRef = useRef<HTMLDivElement>(null)
-  const imageRef = useRef<HTMLImageElement>(null)
+  const stageRef = useRef<HTMLDivElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
 
-  const [zoom, setZoom] = useState(1)
-  const [panOffset, setPanOffset] = useState({ x: 0, y: 0 })
-  const [isPanning, setIsPanning] = useState(false)
-  const [panStart, setPanStart] = useState({ x: 0, y: 0 })
+  // Image natural dimensions → viewBox
+  const [imgDims, setImgDims] = useState<{ w: number; h: number } | null>(
+    activePlan?.image_width && activePlan?.image_height
+      ? { w: activePlan.image_width, h: activePlan.image_height }
+      : null
+  )
+  const [containerSize, setContainerSize] = useState<{ w: number; h: number } | null>(null)
+
+  // Pan/zoom transform: translate(tx,ty) scale(s), origin top-left
+  const [transform, setTransform] = useState({ scale: 1, tx: 0, ty: 0 })
+  const transformInitialised = useRef(false)
+
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [showLegend, setShowLegend] = useState(true)
   const [showUnplaced, setShowUnplaced] = useState(false)
-  const [placingMarker, setPlacingMarker] = useState<PendingMarker | null>(null)
-  const [draggingId, setDraggingId] = useState<string | null>(null)
+  const [placing, setPlacing] = useState<PendingPlacement | null>(null)
+  const [draftPoints, setDraftPoints] = useState<PlanPoint[]>([])
 
-  const selectedMarker = sitePlan.markers.find((m) => m.id === selectedId) ?? null
+  // Gesture bookkeeping (refs — no re-render per move)
+  const pointers = useRef(new Map<number, { x: number; y: number }>())
+  const gesture = useRef<
+    | { type: 'pan'; startX: number; startY: number; startTx: number; startTy: number; moved: boolean }
+    | { type: 'pinch'; startDist: number; startScale: number; startTx: number; startTy: number; midX: number; midY: number }
+    | { type: 'feature'; id: string; lastX: number; lastY: number; moved: boolean }
+    | { type: 'vertex'; id: string; index: number }
+    | null
+  >(null)
 
-  // ── Unplaced assets (have no marker yet) ──────────────────
-  const unplacedAssets: PendingMarker[] = assets
-    .filter((a) => !sitePlan.markers.some((m) => m.asset_code === a.asset_code))
-    .map((a) => ({
-      asset_code: a.asset_code,
-      category: a.category as AssetCategory,
-      status: a.status as AssetStatus,
-    }))
+  const selectedFeature = features.find((f) => f.id === selectedId) ?? null
 
-  // ── Image upload ──────────────────────────────────────────
+  // ── Sizing ────────────────────────────────────────────────
 
-  const handleImageUpload = async (file: File) => {
-    await uploadSitePlanImage(inspectionId, file)
-  }
-
-  // ── Click to place marker ─────────────────────────────────
-
-  const handleImageClick = useCallback(
-    (e: MouseEvent<HTMLDivElement>) => {
-      if (!placingMarker || !imageRef.current) return
-
-      const rect = imageRef.current.getBoundingClientRect()
-      const x = ((e.clientX - rect.left) / rect.width) * 100
-      const y = ((e.clientY - rect.top) / rect.height) * 100
-
-      addMarker({
-        ...placingMarker,
-        label: placingMarker.asset_code,
-        x: Math.max(2, Math.min(98, x)),
-        y: Math.max(2, Math.min(98, y)),
-      })
-      setPlacingMarker(null)
-    },
-    [placingMarker, addMarker]
-  )
-
-  // ── Drag-to-reposition marker ─────────────────────────────
-
-  const handleDragStart = (e: React.DragEvent, id: string) => {
-    setDraggingId(id)
-    e.dataTransfer.effectAllowed = 'move'
-  }
-
-  const handleDrop = (e: React.DragEvent) => {
-    e.preventDefault()
-    if (!draggingId || !imageRef.current) return
-
-    const rect = imageRef.current.getBoundingClientRect()
-    const x = ((e.clientX - rect.left) / rect.width) * 100
-    const y = ((e.clientY - rect.top) / rect.height) * 100
-
-    updateMarker(draggingId, {
-      x: Math.max(2, Math.min(98, x)),
-      y: Math.max(2, Math.min(98, y)),
+  useEffect(() => {
+    const el = containerRef.current
+    if (!el) return
+    const ro = new ResizeObserver(([entry]) => {
+      setContainerSize({ w: entry.contentRect.width, h: entry.contentRect.height })
     })
-    setDraggingId(null)
-  }
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [activePlan?.image_url])
+
+  // Reset dims when switching plans
+  useEffect(() => {
+    transformInitialised.current = false
+    setImgDims(
+      activePlan?.image_width && activePlan?.image_height
+        ? { w: activePlan.image_width, h: activePlan.image_height }
+        : null
+    )
+    setSelectedId(null)
+    setPlacing(null)
+    setDraftPoints([])
+  }, [activePlan?.id, activePlan?.image_width, activePlan?.image_height])
+
+  // Fitted stage size (image contained in container at scale 1)
+  const fit = useMemo(() => {
+    if (!imgDims || !containerSize || containerSize.w === 0) return null
+    const scale = Math.min(containerSize.w / imgDims.w, containerSize.h / imgDims.h)
+    return { w: imgDims.w * scale, h: imgDims.h * scale }
+  }, [imgDims, containerSize])
+
+  // Centre once fitted
+  useEffect(() => {
+    if (!fit || !containerSize || transformInitialised.current) return
+    setTransform({
+      scale: 1,
+      tx: (containerSize.w - fit.w) / 2,
+      ty: (containerSize.h - fit.h) / 2,
+    })
+    transformInitialised.current = true
+  }, [fit, containerSize])
+
+  // ── Coordinate helpers ────────────────────────────────────
+
+  /** Client coords → normalised (0–1) image coords. */
+  const clientToNorm = useCallback((clientX: number, clientY: number): PlanPoint | null => {
+    const stage = stageRef.current
+    if (!stage) return null
+    const rect = stage.getBoundingClientRect()
+    if (rect.width === 0 || rect.height === 0) return null
+    return {
+      x: clamp01((clientX - rect.left) / rect.width),
+      y: clamp01((clientY - rect.top) / rect.height),
+    }
+  }, [])
 
   // ── Zoom ──────────────────────────────────────────────────
 
-  const handleZoomIn = () => setZoom((z) => Math.min(z + 0.25, 4))
-  const handleZoomOut = () => setZoom((z) => Math.max(z - 0.25, 0.5))
-  const handleReset = () => { setZoom(1); setPanOffset({ x: 0, y: 0 }) }
+  const zoomAt = useCallback((clientX: number, clientY: number, factor: number) => {
+    const el = containerRef.current
+    if (!el) return
+    const rect = el.getBoundingClientRect()
+    const cx = clientX - rect.left
+    const cy = clientY - rect.top
+    setTransform((t) => {
+      const scale = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, t.scale * factor))
+      const k = scale / t.scale
+      return {
+        scale,
+        tx: cx - (cx - t.tx) * k,
+        ty: cy - (cy - t.ty) * k,
+      }
+    })
+  }, [])
 
-  // ── Pan (mouse) ───────────────────────────────────────────
+  // React registers onWheel passively, so preventDefault needs a manual
+  // non-passive listener to stop the page scrolling while zooming.
+  useEffect(() => {
+    const el = containerRef.current
+    if (!el) return
+    const onWheel = (e: WheelEvent) => {
+      e.preventDefault()
+      zoomAt(e.clientX, e.clientY, Math.exp(-e.deltaY * 0.0015))
+    }
+    el.addEventListener('wheel', onWheel, { passive: false })
+    return () => el.removeEventListener('wheel', onWheel)
+  }, [zoomAt, activePlan?.image_url])
 
-  const handleMouseDown = (e: MouseEvent) => {
-    if (placingMarker) return
-    if ((e.target as HTMLElement).closest('[role="button"]')) return
-    setIsPanning(true)
-    setPanStart({ x: e.clientX - panOffset.x, y: e.clientY - panOffset.y })
+  const zoomCentre = (factor: number) => {
+    const el = containerRef.current
+    if (!el) return
+    const rect = el.getBoundingClientRect()
+    zoomAt(rect.left + rect.width / 2, rect.top + rect.height / 2, factor)
   }
 
-  const handleMouseMove = (e: MouseEvent) => {
-    if (!isPanning) return
-    setPanOffset({ x: e.clientX - panStart.x, y: e.clientY - panStart.y })
+  const handleReset = () => {
+    transformInitialised.current = false
+    if (fit && containerSize) {
+      setTransform({
+        scale: 1,
+        tx: (containerSize.w - fit.w) / 2,
+        ty: (containerSize.h - fit.h) / 2,
+      })
+      transformInitialised.current = true
+    }
   }
 
-  const handleMouseUp = () => setIsPanning(false)
+  // ── Pointer gestures (pan / pinch / tap / drag) ───────────
 
-  // ── Save markers ──────────────────────────────────────────
+  const handlePointerDown = (e: ReactPointerEvent) => {
+    ;(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId)
+    pointers.current.set(e.pointerId, { x: e.clientX, y: e.clientY })
+
+    if (pointers.current.size === 2) {
+      const [a, b] = Array.from(pointers.current.values())
+      gesture.current = {
+        type: 'pinch',
+        startDist: Math.hypot(b.x - a.x, b.y - a.y),
+        startScale: transform.scale,
+        startTx: transform.tx,
+        startTy: transform.ty,
+        midX: (a.x + b.x) / 2,
+        midY: (a.y + b.y) / 2,
+      }
+      return
+    }
+
+    // Single pointer on empty canvas → pan (may resolve into a tap)
+    if (!gesture.current || gesture.current.type === 'pan') {
+      gesture.current = {
+        type: 'pan',
+        startX: e.clientX,
+        startY: e.clientY,
+        startTx: transform.tx,
+        startTy: transform.ty,
+        moved: false,
+      }
+    }
+  }
+
+  const handlePointerMove = (e: ReactPointerEvent) => {
+    const prev = pointers.current.get(e.pointerId)
+    if (prev) pointers.current.set(e.pointerId, { x: e.clientX, y: e.clientY })
+    const g = gesture.current
+    if (!g) return
+
+    if (g.type === 'pinch' && pointers.current.size >= 2) {
+      const [a, b] = Array.from(pointers.current.values())
+      const dist = Math.hypot(b.x - a.x, b.y - a.y)
+      if (g.startDist === 0) return
+      const el = containerRef.current
+      if (!el) return
+      const rect = el.getBoundingClientRect()
+      const rawScale = g.startScale * (dist / g.startDist)
+      const scale = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, rawScale))
+      const k = scale / g.startScale
+      const midX = (a.x + b.x) / 2 - rect.left
+      const midY = (a.y + b.y) / 2 - rect.top
+      const startMidX = g.midX - rect.left
+      const startMidY = g.midY - rect.top
+      setTransform({
+        scale,
+        tx: midX - (startMidX - g.startTx) * k,
+        ty: midY - (startMidY - g.startTy) * k,
+      })
+      return
+    }
+
+    if (g.type === 'pan') {
+      const dx = e.clientX - g.startX
+      const dy = e.clientY - g.startY
+      if (!g.moved && Math.hypot(dx, dy) < TAP_THRESHOLD_PX) return
+      g.moved = true
+      setTransform((t) => ({ ...t, tx: g.startTx + dx, ty: g.startTy + dy }))
+      return
+    }
+
+    if (g.type === 'feature') {
+      if (readOnly) return   // tap-select only, no drag
+      const dxc = e.clientX - g.lastX
+      const dyc = e.clientY - g.lastY
+      if (!g.moved && Math.hypot(dxc, dyc) < TAP_THRESHOLD_PX) return
+      g.moved = true
+      const stage = stageRef.current
+      if (!stage) return
+      const rect = stage.getBoundingClientRect()
+      const dx = dxc / rect.width
+      const dy = dyc / rect.height
+      g.lastX = e.clientX
+      g.lastY = e.clientY
+      const f = useInspectionStore.getState().planFeatures.find((pf) => pf.id === g.id)
+      if (!f) return
+      updateFeature(g.id, {
+        geometry: f.geometry.map((p) => ({ x: clamp01(p.x + dx), y: clamp01(p.y + dy) })),
+      })
+      return
+    }
+
+    if (g.type === 'vertex') {
+      const norm = clientToNorm(e.clientX, e.clientY)
+      if (!norm) return
+      const f = useInspectionStore.getState().planFeatures.find((pf) => pf.id === g.id)
+      if (!f) return
+      updateFeature(g.id, {
+        geometry: f.geometry.map((p, i) => (i === g.index ? norm : p)),
+      })
+    }
+  }
+
+  const handlePointerUp = (e: ReactPointerEvent) => {
+    pointers.current.delete(e.pointerId)
+    const g = gesture.current
+
+    if (g?.type === 'pan' && !g.moved) {
+      // Tap on empty canvas
+      if (placing) {
+        const norm = clientToNorm(e.clientX, e.clientY)
+        if (norm) {
+          if (placing.mode === 'point') {
+            const f = addFeature({
+              site_plan_id: activePlan!.id,
+              inspection_id: inspectionId,
+              asset_id: placing.asset_id,
+              asset_code: placing.asset_code,
+              category: placing.category,
+              status: placing.status,
+              geometry_type: 'point',
+              geometry: [norm],
+            })
+            setSelectedId(f.id)
+            setPlacing(null)
+          } else {
+            setDraftPoints((pts) => [...pts, norm])
+          }
+        }
+      } else {
+        setSelectedId(null)
+      }
+    }
+
+    // Feature tap (pointer capture retargets pointerup to the container)
+    if (g?.type === 'feature' && !g.moved) {
+      const id = g.id
+      setSelectedId((cur) => (cur === id ? null : id))
+    }
+
+    if (pointers.current.size === 0) gesture.current = null
+    else if (pointers.current.size === 1 && g?.type === 'pinch') {
+      // Dropped from pinch to single finger — restart pan from here
+      const [p] = Array.from(pointers.current.values())
+      gesture.current = {
+        type: 'pan',
+        startX: p.x, startY: p.y,
+        startTx: transform.tx, startTy: transform.ty,
+        moved: true,   // don't treat pinch remnant as a tap
+      }
+    }
+  }
+
+  const handleFeaturePointerDown = (e: ReactPointerEvent, id: string) => {
+    if (placing) return   // while placing, features shouldn't swallow taps
+    e.stopPropagation()
+    ;(containerRef.current as HTMLElement)?.setPointerCapture?.(e.pointerId)
+    pointers.current.set(e.pointerId, { x: e.clientX, y: e.clientY })
+    gesture.current = { type: 'feature', id, lastX: e.clientX, lastY: e.clientY, moved: false }
+  }
+
+  const handleVertexPointerDown = (e: ReactPointerEvent, id: string, index: number) => {
+    if (readOnly) return
+    e.stopPropagation()
+    ;(containerRef.current as HTMLElement)?.setPointerCapture?.(e.pointerId)
+    pointers.current.set(e.pointerId, { x: e.clientX, y: e.clientY })
+    gesture.current = { type: 'vertex', id, index }
+  }
+
+  // ── Polyline capture ──────────────────────────────────────
+
+  const finishPolyline = () => {
+    if (!placing || draftPoints.length < 2 || !activePlan) return
+    const f = addFeature({
+      site_plan_id: activePlan.id,
+      inspection_id: inspectionId,
+      asset_id: placing.asset_id,
+      asset_code: placing.asset_code,
+      category: placing.category,
+      status: placing.status,
+      geometry_type: 'polyline',
+      geometry: draftPoints,
+    })
+    setSelectedId(f.id)
+    setPlacing(null)
+    setDraftPoints([])
+  }
+
+  const cancelPlacing = () => {
+    setPlacing(null)
+    setDraftPoints([])
+  }
+
+  // ── Unplaced assets ───────────────────────────────────────
+
+  const placedCodes = useMemo(
+    () => new Set(planFeatures.map((f) => f.asset_code)),
+    [planFeatures]
+  )
+  const unplacedAssets = assets.filter((a) => !placedCodes.has(a.asset_code))
+
+  const startPlacing = (asset: typeof assets[number]) => {
+    const category = asset.category as AssetCategory
+    setDraftPoints([])
+    setPlacing({
+      asset_id: asset.id,
+      asset_code: asset.asset_code,
+      category,
+      status: asset.status as AssetStatus,
+      mode: LINE_CATEGORIES.has(category) ? 'polyline' : 'point',
+    })
+    setSelectedId(null)
+  }
+
+  // ── Save ──────────────────────────────────────────────────
 
   const handleSave = async () => {
-    await saveMarkers(inspectionId)
+    await saveFeatures(inspectionId)
   }
 
-  // ── No image state ────────────────────────────────────────
+  const handleImageUpload = async (file: File) => {
+    await uploadSitePlanImage(inspectionId, file, activePlan?.id)
+  }
 
-  if (!sitePlan.image_url) {
+  const handleAddPlan = async () => {
+    const name = window.prompt('Name for the new roof area:', `Roof ${String(sitePlans.length + 1).padStart(2, '0')}`)
+    if (name) await createSitePlan(inspectionId, name)
+  }
+
+  // ── ViewBox values ────────────────────────────────────────
+
+  const vb = imgDims ?? { w: 1000, h: 700 }
+  // Symbol unit: ~1.1% of image width, so symbols read like drawing icons
+  const S = vb.w * 0.011
+
+  // ── Empty state (no image on active plan) ─────────────────
+
+  if (!activePlan?.image_url) {
     return (
       <div className="flex flex-col h-full">
-        {/* Upload area */}
+        {sitePlans.length > 0 && (
+          <PlanTabs
+            plans={sitePlans}
+            activeId={activePlan?.id ?? null}
+            onSelect={setActivePlan}
+            onAdd={readOnly ? undefined : handleAddPlan}
+          />
+        )}
         <div
           className="flex-1 flex flex-col items-center justify-center gap-4 p-8 border-2 border-dashed border-surface-border rounded-2xl cursor-pointer hover:border-brand-orange/50 hover:bg-brand-orange/5 transition-all"
           onClick={() => fileInputRef.current?.click()}
@@ -385,7 +596,6 @@ export function SiteMap({ inspectionId, onMarkerClick, readOnly = false }: SiteM
           />
         </div>
 
-        {/* Or sync from assets */}
         {assets.length > 0 && (
           <div className="mt-4 p-4 bg-surface-raised rounded-xl border border-surface-border">
             <p className="text-slate-400 text-sm mb-3">
@@ -393,7 +603,7 @@ export function SiteMap({ inspectionId, onMarkerClick, readOnly = false }: SiteM
               Upload a site plan to place markers, or auto-generate a grid layout.
             </p>
             <button
-              onClick={syncMarkersFromAssets}
+              onClick={syncFeaturesFromAssets}
               className="flex items-center gap-2 text-brand-orange text-sm font-medium hover:text-orange-400 transition-colors"
             >
               <Layers size={14} />
@@ -405,14 +615,21 @@ export function SiteMap({ inspectionId, onMarkerClick, readOnly = false }: SiteM
     )
   }
 
-  // ── Map with image ────────────────────────────────────────
+  // ── Map view ──────────────────────────────────────────────
 
   return (
     <div className="flex flex-col h-full gap-3">
-      {/* ── Toolbar ──────────────────────────────────────── */}
+      {/* Roof area tabs */}
+      <PlanTabs
+        plans={sitePlans}
+        activeId={activePlan.id}
+        onSelect={setActivePlan}
+        onAdd={readOnly ? undefined : handleAddPlan}
+      />
+
+      {/* Toolbar */}
       {!readOnly && (
         <div className="flex items-center gap-2 flex-wrap">
-          {/* Upload new image */}
           <button
             onClick={() => fileInputRef.current?.click()}
             className="flex items-center gap-1.5 h-8 px-3 rounded-lg bg-surface-raised border border-surface-border text-slate-300 text-xs hover:border-brand-orange/40 hover:text-white transition-all"
@@ -431,7 +648,6 @@ export function SiteMap({ inspectionId, onMarkerClick, readOnly = false }: SiteM
             }}
           />
 
-          {/* Sync from assets */}
           {unplacedAssets.length > 0 && (
             <button
               onClick={() => setShowUnplaced((v) => !v)}
@@ -444,7 +660,6 @@ export function SiteMap({ inspectionId, onMarkerClick, readOnly = false }: SiteM
 
           <div className="flex-1" />
 
-          {/* Legend toggle */}
           <button
             onClick={() => setShowLegend((v) => !v)}
             className="h-8 w-8 flex items-center justify-center rounded-lg bg-surface-raised border border-surface-border text-slate-400 hover:text-white transition-all"
@@ -452,7 +667,6 @@ export function SiteMap({ inspectionId, onMarkerClick, readOnly = false }: SiteM
             {showLegend ? <EyeOff size={14} /> : <Eye size={14} />}
           </button>
 
-          {/* Save button */}
           {siteMapDirty && (
             <button
               onClick={handleSave}
@@ -469,7 +683,7 @@ export function SiteMap({ inspectionId, onMarkerClick, readOnly = false }: SiteM
         </div>
       )}
 
-      {/* ── Unplaced assets drawer ────────────────────────── */}
+      {/* Unplaced drawer */}
       {showUnplaced && unplacedAssets.length > 0 && (
         <div className="bg-surface-raised rounded-xl border border-surface-border p-3">
           <div className="flex items-center justify-between mb-2">
@@ -480,111 +694,171 @@ export function SiteMap({ inspectionId, onMarkerClick, readOnly = false }: SiteM
           </div>
           <div className="flex gap-2 flex-wrap max-h-24 overflow-y-auto">
             {unplacedAssets.map((a) => {
-              const cfg = PIN_CONFIG[a.status]
-              const isSelected = placingMarker?.asset_code === a.asset_code
+              const c = STATUS_COLORS[a.status as AssetStatus]
+              const isSelected = placing?.asset_code === a.asset_code
+              const isLine = LINE_CATEGORIES.has(a.category as AssetCategory)
               return (
                 <button
                   key={a.asset_code}
-                  onClick={() => setPlacingMarker(isSelected ? null : a)}
+                  onClick={() => (isSelected ? cancelPlacing() : startPlacing(a))}
                   className={cn(
-                    'text-[10px] font-mono font-bold px-2 py-1 rounded-md border transition-all',
+                    'flex items-center gap-1 text-[10px] font-mono font-bold px-2 py-1 rounded-md border transition-all',
                     isSelected ? 'ring-2 ring-white/50 scale-105' : 'hover:scale-105'
                   )}
-                  style={{
-                    backgroundColor: cfg.bg,
-                    borderColor: cfg.border,
-                    color: cfg.text,
-                  }}
+                  style={{ backgroundColor: c.bg, borderColor: c.border, color: c.text }}
                 >
+                  {isLine && <Spline size={10} />}
                   {a.asset_code}
                 </button>
               )
             })}
           </div>
-          {placingMarker && (
+          {placing && (
             <p className="text-brand-orange text-xs mt-2 animate-pulse font-medium">
-              👆 Click anywhere on the map to place {placingMarker.asset_code}
+              {placing.mode === 'point'
+                ? `👆 Tap the map to place ${placing.asset_code}`
+                : `👆 Tap to add vertices for ${placing.asset_code}, then press ✓ to finish`}
             </p>
           )}
         </div>
       )}
 
-      {/* ── Map canvas ───────────────────────────────────── */}
+      {/* Canvas */}
       <div
         ref={containerRef}
         className={cn(
           'relative flex-1 min-h-[300px] rounded-xl overflow-hidden border border-surface-border bg-surface-base',
-          placingMarker ? 'cursor-crosshair' : isPanning ? 'cursor-grabbing' : 'cursor-grab'
+          placing ? 'cursor-crosshair' : 'cursor-grab active:cursor-grabbing'
         )}
-        onMouseDown={handleMouseDown}
-        onMouseMove={handleMouseMove}
-        onMouseUp={handleMouseUp}
-        onMouseLeave={handleMouseUp}
-        onDragOver={(e) => e.preventDefault()}
-        onDrop={handleDrop}
-        onClick={() => { if (!placingMarker) setSelectedId(null) }}
+        style={{ touchAction: 'none' }}
+        onPointerDown={handlePointerDown}
+        onPointerMove={handlePointerMove}
+        onPointerUp={handlePointerUp}
+        onPointerCancel={handlePointerUp}
       >
-        {/* Zoomable / pannable inner layer */}
+        {/* Transformed stage: image + SVG overlay share one box */}
         <div
+          ref={stageRef}
           style={{
-            transform: `translate(${panOffset.x}px, ${panOffset.y}px) scale(${zoom})`,
-            transformOrigin: 'center center',
-            transition: isPanning ? 'none' : 'transform 0.15s ease-out',
-            width: '100%',
-            height: '100%',
-            position: 'relative',
+            position: 'absolute',
+            left: 0,
+            top: 0,
+            width: fit?.w ?? '100%',
+            height: fit?.h ?? '100%',
+            transform: `translate(${transform.tx}px, ${transform.ty}px) scale(${transform.scale})`,
+            transformOrigin: '0 0',
           }}
-          onClick={handleImageClick}
         >
-          {/* The aerial image */}
           <img
-            ref={imageRef}
-            src={sitePlan.image_url!}
-            alt="Site plan"
-            className="w-full h-full object-contain select-none pointer-events-none"
+            src={activePlan.image_url}
+            alt={activePlan.name}
+            className="absolute inset-0 w-full h-full select-none pointer-events-none"
             draggable={false}
+            onLoad={(e) => {
+              const img = e.currentTarget
+              if (!imgDims && img.naturalWidth > 0) {
+                setImgDims({ w: img.naturalWidth, h: img.naturalHeight })
+              }
+            }}
           />
 
-          {/* Markers */}
-          {sitePlan.markers.map((marker) => (
-            <Pin
-              key={marker.id}
-              marker={marker}
-              selected={marker.id === selectedId}
-              readOnly={readOnly}
-              onClick={() => {
-                setSelectedId(marker.id === selectedId ? null : marker.id)
-                onMarkerClick?.(marker.asset_code)
-              }}
-              onDragStart={handleDragStart}
-            />
-          ))}
+          <svg
+            viewBox={`0 0 ${vb.w} ${vb.h}`}
+            className="absolute inset-0 w-full h-full overflow-visible"
+            style={{ pointerEvents: 'none' }}
+          >
+            {/* Scope polygon (dashed red boundary, like the overview page) */}
+            {activePlan.scope_polygon && activePlan.scope_polygon.length >= 3 && (
+              <polygon
+                points={activePlan.scope_polygon.map((p) => `${p.x * vb.w},${p.y * vb.h}`).join(' ')}
+                fill="#dc2626"
+                fillOpacity={0.12}
+                stroke="#dc2626"
+                strokeWidth={S * 0.3}
+                strokeDasharray={`${S} ${S * 0.6}`}
+              />
+            )}
 
-          {/* Selected marker tooltip */}
-          {selectedMarker && (
-            <MarkerTooltip
-              marker={selectedMarker}
-              readOnly={readOnly}
-              onLink={() => { onMarkerClick?.(selectedMarker.asset_code); setSelectedId(null) }}
-              onRemove={() => { removeMarker(selectedMarker.id); setSelectedId(null) }}
-              onClose={() => setSelectedId(null)}
-            />
-          )}
+            {/* Features */}
+            {features.map((f) => {
+              const pts = f.geometry.map((p) => ({ x: p.x * vb.w, y: p.y * vb.h }))
+              if (pts.length === 0) return null
+              const isSelected = f.id === selectedId
+              const anchor = f.geometry_type === 'point'
+                ? pts[0]
+                : pts[Math.floor(pts.length / 2)]
+
+              return (
+                <g
+                  key={f.id}
+                  style={{ pointerEvents: 'auto', cursor: readOnly ? 'pointer' : 'move' }}
+                  onPointerDown={(e) => handleFeaturePointerDown(e, f.id)}
+                >
+                  {f.geometry_type === 'point' ? (
+                    <>
+                      {isSelected && (
+                        <circle cx={pts[0].x} cy={pts[0].y} r={S * 1.6} fill="none" stroke="#ffffff" strokeWidth={S * 0.18} opacity={0.8} />
+                      )}
+                      <PointSymbol category={f.category} cx={pts[0].x} cy={pts[0].y} s={S} />
+                    </>
+                  ) : (
+                    <LineSymbol feature={f} points={pts} s={S} selected={isSelected} />
+                  )}
+
+                  {/* Vertex handles when a polyline is selected */}
+                  {isSelected && !readOnly && f.geometry_type !== 'point' && pts.map((p, i) => (
+                    <circle
+                      key={i}
+                      cx={p.x} cy={p.y} r={S * 0.55}
+                      fill="#ffffff" stroke="#0f172a" strokeWidth={S * 0.12}
+                      style={{ cursor: 'grab' }}
+                      onPointerDown={(e) => handleVertexPointerDown(e, f.id, i)}
+                    />
+                  ))}
+
+                  <FeatureLabel
+                    text={f.label ?? f.asset_code}
+                    x={anchor.x}
+                    y={anchor.y - S * 2.2}
+                    s={S}
+                    status={f.status}
+                    selected={isSelected}
+                  />
+                </g>
+              )
+            })}
+
+            {/* Draft polyline while capturing */}
+            {placing?.mode === 'polyline' && draftPoints.length > 0 && (
+              <g style={{ pointerEvents: 'none' }}>
+                <polyline
+                  points={draftPoints.map((p) => `${p.x * vb.w},${p.y * vb.h}`).join(' ')}
+                  fill="none"
+                  stroke="#ffffff"
+                  strokeWidth={S * 0.25}
+                  strokeDasharray={`${S * 0.6} ${S * 0.4}`}
+                />
+                {draftPoints.map((p, i) => (
+                  <circle key={i} cx={p.x * vb.w} cy={p.y * vb.h} r={S * 0.5} fill="#f97316" stroke="#ffffff" strokeWidth={S * 0.12} />
+                ))}
+              </g>
+            )}
+          </svg>
         </div>
 
         {/* Legend */}
-        {showLegend && <MapLegend markers={sitePlan.markers} />}
+        {showLegend && <MapLegend features={features} />}
 
         {/* Zoom controls */}
         <div className="absolute bottom-3 right-3 flex flex-col gap-1.5 z-30">
           <button
-            onClick={handleZoomIn}
+            onClick={() => zoomCentre(1.4)}
             className="w-8 h-8 rounded-lg bg-surface-base/90 border border-surface-border flex items-center justify-center text-slate-300 hover:text-white hover:bg-surface-raised transition-all"
           >
             <ZoomIn size={14} />
           </button>
           <button
-            onClick={handleZoomOut}
+            onClick={() => zoomCentre(1 / 1.4)}
             className="w-8 h-8 rounded-lg bg-surface-base/90 border border-surface-border flex items-center justify-center text-slate-300 hover:text-white hover:bg-surface-raised transition-all"
           >
             <ZoomOut size={14} />
@@ -597,20 +871,36 @@ export function SiteMap({ inspectionId, onMarkerClick, readOnly = false }: SiteM
           </button>
         </div>
 
-        {/* Placing mode indicator */}
-        {placingMarker && (
+        {/* Placing banner + polyline controls */}
+        {placing && (
           <div className="absolute top-3 left-3 z-30 flex items-center gap-2 bg-surface-base/95 border border-brand-orange/40 rounded-xl px-3 py-2">
-            <div
-              className="w-4 h-4 rounded text-[9px] font-bold font-mono text-white flex items-center justify-center"
-              style={{ backgroundColor: PIN_CONFIG[placingMarker.status].bg }}
-            >
-              +
-            </div>
             <span className="text-white text-xs font-medium">
-              Placing <span className="text-brand-orange font-mono">{placingMarker.asset_code}</span>
+              {placing.mode === 'point' ? 'Placing' : 'Drawing'}{' '}
+              <span className="text-brand-orange font-mono">{placing.asset_code}</span>
+              {placing.mode === 'polyline' && (
+                <span className="text-slate-400 ml-1">({draftPoints.length} pts)</span>
+              )}
             </span>
+            {placing.mode === 'polyline' && (
+              <>
+                <button
+                  onClick={(e) => { e.stopPropagation(); setDraftPoints((p) => p.slice(0, -1)) }}
+                  disabled={draftPoints.length === 0}
+                  className="w-6 h-6 rounded-md bg-surface-raised border border-surface-border flex items-center justify-center text-slate-300 hover:text-white disabled:opacity-40"
+                >
+                  <Undo2 size={12} />
+                </button>
+                <button
+                  onClick={(e) => { e.stopPropagation(); finishPolyline() }}
+                  disabled={draftPoints.length < 2}
+                  className="w-6 h-6 rounded-md bg-status-compliant flex items-center justify-center text-white disabled:opacity-40"
+                >
+                  <Check size={12} />
+                </button>
+              </>
+            )}
             <button
-              onClick={(e) => { e.stopPropagation(); setPlacingMarker(null) }}
+              onClick={(e) => { e.stopPropagation(); cancelPlacing() }}
               className="text-slate-500 hover:text-white ml-1"
             >
               <X size={12} />
@@ -618,16 +908,25 @@ export function SiteMap({ inspectionId, onMarkerClick, readOnly = false }: SiteM
           </div>
         )}
 
-        {/* Marker count badge */}
+        {/* Feature count */}
         <div className="absolute bottom-3 left-3 z-30 flex items-center gap-1.5 bg-surface-base/90 border border-surface-border rounded-lg px-2.5 py-1.5">
           <MapPin size={11} className="text-brand-orange" />
-          <span className="text-white text-[10px] font-bold">
-            {sitePlan.markers.length}
-          </span>
-          <span className="text-slate-500 text-[10px]">markers</span>
+          <span className="text-white text-[10px] font-bold">{features.length}</span>
+          <span className="text-slate-500 text-[10px]">placed</span>
         </div>
 
-        {/* Loading overlay */}
+        {/* Selected feature panel */}
+        {selectedFeature && (
+          <FeaturePanel
+            feature={selectedFeature}
+            readOnly={readOnly}
+            onOpen={() => { onMarkerClick?.(selectedFeature.asset_code); setSelectedId(null) }}
+            onRemove={() => { removeFeature(selectedFeature.id); setSelectedId(null) }}
+            onClose={() => setSelectedId(null)}
+          />
+        )}
+
+        {/* Saving overlay */}
         {saving && (
           <div className="absolute inset-0 bg-surface-base/50 flex items-center justify-center z-50">
             <div className="flex items-center gap-2 bg-surface-raised border border-surface-border rounded-xl px-4 py-3 shadow-xl">
@@ -638,24 +937,63 @@ export function SiteMap({ inspectionId, onMarkerClick, readOnly = false }: SiteM
         )}
       </div>
 
-      {/* ── Icon legend (matches Anchor Safe PDF format) ── */}
+      {/* Icon legend (matches Anchor Safe PDF format) */}
       <div className="bg-surface-raised rounded-xl border border-surface-border p-3">
-        <button
-          className="w-full flex items-center gap-2 text-left"
-          onClick={() => setShowUnplaced((v) => !v)}
-        >
-          <Info size={13} className="text-slate-500" />
+        <div className="flex items-center gap-2">
           <span className="text-slate-400 text-xs font-semibold uppercase tracking-wider">Icon Legend</span>
-        </button>
+        </div>
         <div className="grid grid-cols-2 sm:grid-cols-3 gap-x-4 gap-y-1 mt-2">
           {(Object.entries(ASSET_CATEGORY_LABELS) as [AssetCategory, string][]).map(([code, label]) => (
             <div key={code} className="flex items-center gap-1.5">
-              <span className="text-brand-orange text-[9px] font-mono font-bold w-10 shrink-0">{code}</span>
+              <svg viewBox="-12 -12 24 24" className="w-4 h-4 shrink-0">
+                <PointSymbol category={code} cx={0} cy={0} s={9} />
+              </svg>
+              <span className="text-brand-orange text-[9px] font-mono font-bold w-8 shrink-0">{code}</span>
               <span className="text-slate-500 text-[10px] truncate">{label}</span>
             </div>
           ))}
         </div>
       </div>
+    </div>
+  )
+}
+
+// ─── Roof area tabs ───────────────────────────────────────────
+
+function PlanTabs({
+  plans, activeId, onSelect, onAdd,
+}: {
+  plans: { id: string; name: string }[]
+  activeId: string | null
+  onSelect: (id: string) => void
+  onAdd?: () => void
+}) {
+  if (plans.length === 0) return null
+  return (
+    <div className="flex items-center gap-1.5 flex-wrap">
+      {plans.map((p) => (
+        <button
+          key={p.id}
+          onClick={() => onSelect(p.id)}
+          className={cn(
+            'h-8 px-3 rounded-lg text-xs font-medium border transition-all',
+            p.id === activeId
+              ? 'bg-brand-orange text-white border-brand-orange shadow-md'
+              : 'bg-surface-raised text-slate-300 border-surface-border hover:text-white hover:border-brand-orange/40'
+          )}
+        >
+          {p.name}
+        </button>
+      ))}
+      {onAdd && (
+        <button
+          onClick={onAdd}
+          className="h-8 w-8 rounded-lg bg-surface-raised border border-surface-border flex items-center justify-center text-slate-400 hover:text-white hover:border-brand-orange/40 transition-all"
+          title="Add roof area"
+        >
+          <Plus size={14} />
+        </button>
+      )}
     </div>
   )
 }
