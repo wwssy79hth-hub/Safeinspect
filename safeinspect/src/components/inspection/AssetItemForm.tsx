@@ -12,6 +12,7 @@ import { useAuthStore } from '@/store/auth.store'
 import { useInspectionStore } from '@/store/inspection.store'
 import { allowedAssetStatusesFor, defaultAssetStatusFor } from '@/lib/reportTypes'
 import { useStandards, standardOptionsFor } from '@/lib/standards'
+import { useAssetContext } from '@/lib/registry'
 import { usePhotoCapture } from '@/hooks/usePhotoCapture'
 import {
   QUICK_FILL_OPTIONS,
@@ -342,6 +343,21 @@ export function AssetItemForm({
     userId: user?.id ?? '',
   })
 
+  // Durable-asset history for the tag being captured (debounced so
+  // typing a code doesn't fire a query per keystroke). This is the
+  // registry's payoff: "this anchor's previous results", in the
+  // capture flow.
+  const [historyTag, setHistoryTag] = useState(asset?.asset_code ?? '')
+  useEffect(() => {
+    const t = setTimeout(() => setHistoryTag(form.asset_code), 500)
+    return () => clearTimeout(t)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [form.asset_code])
+  const assetContext = useAssetContext(
+    activeInspection?.site_id, category, historyTag, inspectionId
+  )
+  const lastVisit = assetContext?.history[0] ?? null
+
   const patch = useCallback((updates: Partial<FormState>) => {
     setForm((prev) => ({ ...prev, ...updates }))
     setDirty(true)
@@ -535,6 +551,52 @@ export function AssetItemForm({
               />
             </div>
           </div>
+
+          {/* ── Registry history for this asset ──────────────── */}
+          {assetContext && (
+            <div className={cn(
+              'rounded-xl border px-3 py-2.5 text-xs leading-relaxed',
+              assetContext.asset.status === 'do_not_use'
+                ? 'border-status-noncompliant/40 bg-status-noncompliant-bg/10'
+                : 'border-surface-border bg-surface-base'
+            )}>
+              <div className="flex items-center gap-1.5 text-slate-400 font-semibold uppercase tracking-widest text-[10px] mb-1">
+                <BookOpen size={11} className="text-brand-orange" />
+                Asset history — {assetContext.asset.tag}
+                {assetContext.asset.status === 'do_not_use' && (
+                  <span className="ml-auto text-status-noncompliant normal-case tracking-normal font-bold">
+                    TAGGED DO NOT USE
+                  </span>
+                )}
+              </div>
+              {lastVisit ? (
+                <p className="text-slate-400">
+                  Last visit{' '}
+                  <span className="text-white">{lastVisit.date_of_inspection}</span>:{' '}
+                  <span className={cn(
+                    'font-semibold',
+                    lastVisit.status === 'compliant' ? 'text-status-compliant'
+                      : lastVisit.status === 'non_compliant' ? 'text-status-noncompliant'
+                      : 'text-slate-300'
+                  )}>
+                    {lastVisit.status.replace('_', '-')}
+                  </span>
+                  {assetContext.asset.next_due_on && (
+                    <> · next due <span className="text-white">{assetContext.asset.next_due_on}</span></>
+                  )}
+                  {lastVisit.finding && (
+                    <span className="block text-slate-500 mt-0.5 line-clamp-2">
+                      “{lastVisit.finding}”
+                    </span>
+                  )}
+                </p>
+              ) : (
+                <p className="text-slate-500">
+                  In the register — no results from previous visits.
+                </p>
+              )}
+            </div>
+          )}
 
           {/* ── Status selector ──────────────────────────────── */}
           <div>

@@ -51,6 +51,9 @@ export type UserRole = 'admin' | 'inspector' | 'viewer'
 
 export type ServiceCondition = 'standard' | 'harsh'
 
+/** Durable registry asset lifecycle (distinct from per-visit AssetStatus) */
+export type RegistryAssetStatus = 'active' | 'do_not_use' | 'removed'
+
 export type TestMethod =
   | 'proof_load'
   | 'documentation_review'
@@ -171,6 +174,7 @@ export interface Database {
           aerial_map_url: string | null
           drawing_scaled: boolean | null
           notes: string | null
+          site_id: string | null
           created_at: string
           updated_at: string
           created_by: string
@@ -198,6 +202,7 @@ export interface Database {
           standard_referenced: string | null
           corrective_action: string | null
           sort_order: number
+          asset_id: string | null
           created_at: string
           updated_at: string
         }
@@ -206,7 +211,22 @@ export interface Database {
           'inspection_id' | 'category' | 'asset_code'
         >
         Update: Partial<Database['public']['Tables']['inspection_assets']['Row']>
-        Relationships: []
+        Relationships: [
+          {
+            foreignKeyName: 'inspection_assets_inspection_id_fkey'
+            columns: ['inspection_id']
+            isOneToOne: false
+            referencedRelation: 'inspections'
+            referencedColumns: ['id']
+          },
+          {
+            foreignKeyName: 'inspection_assets_asset_id_fkey'
+            columns: ['asset_id']
+            isOneToOne: false
+            referencedRelation: 'assets'
+            referencedColumns: ['id']
+          },
+        ]
       }
 
       asset_photos: {
@@ -244,6 +264,76 @@ export interface Database {
           'inspection_id' | 'category' | 'total' | 'compliant' | 'non_compliant'
         >
         Update: Partial<Database['public']['Tables']['inspection_summary']['Row']>
+        Relationships: []
+      }
+
+      clients: {
+        Row: {
+          id: string
+          name: string
+          contact_name: string | null
+          contact_email: string | null
+          contact_phone: string | null
+          created_at: string
+          updated_at: string
+        }
+        Insert: Insertable<
+          Database['public']['Tables']['clients']['Row'],
+          'name'
+        >
+        Update: Partial<Database['public']['Tables']['clients']['Row']>
+        Relationships: []
+      }
+
+      sites: {
+        Row: {
+          id: string
+          client_id: string
+          name: string
+          address: string
+          service_condition: ServiceCondition
+          notes: string | null
+          created_at: string
+          updated_at: string
+        }
+        Insert: Insertable<
+          Database['public']['Tables']['sites']['Row'],
+          'client_id' | 'name' | 'address'
+        >
+        Update: Partial<Database['public']['Tables']['sites']['Row']>
+        Relationships: [
+          {
+            foreignKeyName: 'sites_client_id_fkey'
+            columns: ['client_id']
+            isOneToOne: false
+            referencedRelation: 'clients'
+            referencedColumns: ['id']
+          },
+        ]
+      }
+
+      assets: {
+        Row: {
+          id: string
+          site_id: string
+          category: AssetCategory
+          tag: string
+          serial_number: string | null
+          manufacturer: string | null
+          model: string | null
+          installed_on: string | null
+          location_note: string | null
+          status: RegistryAssetStatus
+          last_pass_on: string | null
+          next_due_on: string | null
+          created_at: string
+          updated_at: string
+        }
+        Insert: Insertable<
+          Database['public']['Tables']['assets']['Row'],
+          'site_id' | 'category' | 'tag'
+        >
+        Update: Partial<Database['public']['Tables']['assets']['Row']>
         Relationships: []
       }
 
@@ -345,6 +435,9 @@ export type Inspection = Database['public']['Tables']['inspections']['Row']
 export type InspectionAsset = Database['public']['Tables']['inspection_assets']['Row']
 export type AssetPhoto = Database['public']['Tables']['asset_photos']['Row']
 export type InspectionSummaryRow = Database['public']['Tables']['inspection_summary']['Row']
+export type ClientRow = Database['public']['Tables']['clients']['Row']
+export type SiteRow = Database['public']['Tables']['sites']['Row']
+export type RegistryAsset = Database['public']['Tables']['assets']['Row']
 export type StandardRow = Database['public']['Tables']['standards']['Row']
 export type AssetClassRow = Database['public']['Tables']['asset_classes']['Row']
 export type InspectionRuleRow = Database['public']['Tables']['inspection_rules']['Row']

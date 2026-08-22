@@ -4,6 +4,7 @@ import { supabase } from '@/lib/supabase'
 import { resolveStorageUrl } from '@/lib/storageUrls'
 import { defaultAssetStatusFor, isProposalReport } from '@/lib/reportTypes'
 import { DEFAULT_STANDARD } from '@/lib/inspection-data'
+import { findOrCreateSite } from '@/lib/registry'
 import type {
   Inspection,
   InspectionAsset,
@@ -212,6 +213,12 @@ export const useInspectionStore = create<InspectionState>()(
           if (!draft) throw new Error('No draft to save')
           set({ saving: true, error: null })
           try {
+            // Resolve the durable site record (created if new); the
+            // free-text columns stay as denormalised display copies.
+            const siteId = await findOrCreateSite(
+              draft.client_name, draft.site_name, draft.site_address
+            )
+
             const { data, error } = await supabase
               .from('inspections')
               .insert({
@@ -226,6 +233,7 @@ export const useInspectionStore = create<InspectionState>()(
                 inspection_status: 'draft',
                 certifier_id: draft.certifier_id || userId,
                 created_by: userId,
+                site_id: siteId,
               })
               .select()
               .single()
