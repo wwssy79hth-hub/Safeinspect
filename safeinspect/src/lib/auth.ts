@@ -1,4 +1,5 @@
 import { supabase } from '@/lib/supabase'
+import type { Session } from '@supabase/supabase-js'
 import type { Profile } from '@/types/database'
 
 // ─── Types ───────────────────────────────────────────────────
@@ -139,7 +140,7 @@ export const authService = {
    * Subscribe to auth state changes. Returns the unsubscribe function.
    */
   onAuthStateChange(
-    callback: (event: string, session: Awaited<ReturnType<typeof authService.getSession>>) => void
+    callback: (event: string, session: Session | null) => void
   ) {
     const { data } = supabase.auth.onAuthStateChange((event, session) => {
       callback(event, session)

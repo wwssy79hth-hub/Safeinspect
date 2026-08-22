@@ -173,7 +173,7 @@ export default function InspectionDetail() {
 
   const {
     activeInspection, saving,
-    loadInspection, loadAssets, loadSitePlan,
+    loadInspection, loadAssets, loadSitePlans,
     updateInspection, getOverallStatus,
     assets,
   } = useInspectionStore()
@@ -192,10 +192,11 @@ export default function InspectionDetail() {
   // Load inspection + assets + site plan on mount
   useEffect(() => {
     if (!id) return
-    loadInspection(id)
+    // Site plans load after the inspection so the legacy aerial_map_url
+    // fallback can promote it into a site_plans row on first open.
+    loadInspection(id).then(() => loadSitePlans(id))
     loadAssets(id)
-    loadSitePlan(id)
-  }, [id, loadInspection, loadAssets, loadSitePlan])
+  }, [id, loadInspection, loadAssets, loadSitePlans])
 
   // Update overall status whenever assets change
   useEffect(() => {

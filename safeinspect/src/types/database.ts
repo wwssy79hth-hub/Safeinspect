@@ -92,6 +92,22 @@ export const ASSET_CATEGORIES: AssetCategory[] = Object.keys(
   ASSET_CATEGORY_LABELS
 ) as AssetCategory[]
 
+// ─── Plan geometry ────────────────────────────────────────────
+
+export type PlanGeometryType = 'point' | 'polyline' | 'polygon'
+
+/** A vertex in image-normalised coordinates (0–1 of image width/height). */
+export interface PlanPoint {
+  x: number
+  y: number
+}
+
+/** Label offset from its feature anchor, in image-normalised units. */
+export interface PlanLabelOffset {
+  dx: number
+  dy: number
+}
+
 // ─── Database Table Row Types ─────────────────────────────────
 
 export interface Database {
@@ -110,8 +126,9 @@ export interface Database {
           created_at: string
           updated_at: string
         }
-        Insert: Omit<Database['public']['Tables']['profiles']['Row'], 'created_at' | 'updated_at'>
+        Insert: Partial<Database['public']['Tables']['profiles']['Row']>
         Update: Partial<Database['public']['Tables']['profiles']['Insert']>
+        Relationships: []
       }
 
       inspections: {
@@ -141,11 +158,9 @@ export interface Database {
           updated_at: string
           created_by: string
         }
-        Insert: Omit<
-          Database['public']['Tables']['inspections']['Row'],
-          'id' | 'created_at' | 'updated_at'
-        >
+        Insert: Partial<Database['public']['Tables']['inspections']['Row']>
         Update: Partial<Database['public']['Tables']['inspections']['Insert']>
+        Relationships: []
       }
 
       inspection_assets: {
@@ -165,11 +180,9 @@ export interface Database {
           created_at: string
           updated_at: string
         }
-        Insert: Omit<
-          Database['public']['Tables']['inspection_assets']['Row'],
-          'id' | 'created_at' | 'updated_at'
-        >
+        Insert: Partial<Database['public']['Tables']['inspection_assets']['Row']>
         Update: Partial<Database['public']['Tables']['inspection_assets']['Insert']>
+        Relationships: []
       }
 
       asset_photos: {
@@ -184,11 +197,51 @@ export interface Database {
           created_at: string
           uploaded_by: string
         }
-        Insert: Omit<
-          Database['public']['Tables']['asset_photos']['Row'],
-          'id' | 'created_at'
-        >
+        Insert: Partial<Database['public']['Tables']['asset_photos']['Row']>
         Update: Partial<Database['public']['Tables']['asset_photos']['Insert']>
+        Relationships: []
+      }
+
+      site_plans: {
+        Row: {
+          id: string
+          inspection_id: string
+          name: string
+          image_path: string | null
+          image_url: string | null
+          image_width: number | null
+          image_height: number | null
+          scope_polygon: PlanPoint[] | null
+          drawing_scaled: boolean
+          sort_order: number
+          created_at: string
+          updated_at: string
+        }
+        Insert: Partial<Database['public']['Tables']['site_plans']['Row']>
+        Update: Partial<Database['public']['Tables']['site_plans']['Insert']>
+        Relationships: []
+      }
+
+      plan_features: {
+        Row: {
+          id: string
+          site_plan_id: string
+          inspection_id: string
+          asset_id: string | null
+          asset_code: string
+          category: AssetCategory
+          status: AssetStatus
+          geometry_type: PlanGeometryType
+          geometry: PlanPoint[]
+          label: string | null
+          label_offset: PlanLabelOffset | null
+          sort_order: number
+          created_at: string
+          updated_at: string
+        }
+        Insert: Partial<Database['public']['Tables']['plan_features']['Row']>
+        Update: Partial<Database['public']['Tables']['plan_features']['Insert']>
+        Relationships: []
       }
 
       inspection_summary: {
@@ -201,11 +254,9 @@ export interface Database {
           non_compliant: number
           updated_at: string
         }
-        Insert: Omit<
-          Database['public']['Tables']['inspection_summary']['Row'],
-          'id' | 'updated_at'
-        >
+        Insert: Partial<Database['public']['Tables']['inspection_summary']['Row']>
         Update: Partial<Database['public']['Tables']['inspection_summary']['Insert']>
+        Relationships: []
       }
     }
 
@@ -234,6 +285,7 @@ export interface Database {
       issue_type: IssueType
       user_role: UserRole
       priority: Priority
+      plan_geometry_type: PlanGeometryType
     }
   }
 }
@@ -245,3 +297,5 @@ export type Inspection = Database['public']['Tables']['inspections']['Row']
 export type InspectionAsset = Database['public']['Tables']['inspection_assets']['Row']
 export type AssetPhoto = Database['public']['Tables']['asset_photos']['Row']
 export type InspectionSummaryRow = Database['public']['Tables']['inspection_summary']['Row']
+export type SitePlan = Database['public']['Tables']['site_plans']['Row']
+export type PlanFeature = Database['public']['Tables']['plan_features']['Row']
