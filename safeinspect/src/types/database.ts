@@ -303,6 +303,7 @@ export interface Database {
           geometry: PlanPoint[]
           label: string | null
           label_offset: PlanLabelOffset | null
+          group_id: string | null
           sort_order: number
           created_at: string
           updated_at: string

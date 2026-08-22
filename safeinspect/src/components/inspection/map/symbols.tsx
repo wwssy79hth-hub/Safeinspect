@@ -246,7 +246,7 @@ export function LineSymbol({
 // Rendered in image-space; text length is estimated monospace.
 
 export function FeatureLabel({
-  text, x, y, s, status, selected,
+  text, x, y, s, status, selected, onPointerDown,
 }: {
   text: string
   x: number
@@ -254,6 +254,8 @@ export function FeatureLabel({
   s: number
   status: AssetStatus
   selected?: boolean
+  /** When provided, the label is draggable (repositioning + leader line). */
+  onPointerDown?: (e: React.PointerEvent) => void
 }) {
   const c = STATUS_COLORS[status]
   const fontSize = s * 1.5
@@ -262,7 +264,10 @@ export function FeatureLabel({
   const h = fontSize * 1.45
 
   return (
-    <g>
+    <g
+      onPointerDown={onPointerDown}
+      style={onPointerDown ? { cursor: 'grab', pointerEvents: 'auto' } : undefined}
+    >
       <rect
         x={x - w / 2} y={y - h / 2} width={w} height={h}
         rx={h * 0.22}

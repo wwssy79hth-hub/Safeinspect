@@ -15,18 +15,19 @@ import {
 import {
   Upload, ZoomIn, ZoomOut, RotateCcw, Save, MapPin, X, Plus,
   Link2, Eye, EyeOff, ChevronDown, ChevronUp, ImageIcon, Layers,
-  Check, Undo2, Spline,
+  Check, Undo2, Spline, Ungroup,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useInspectionStore } from '@/store/inspection.store'
 import {
-  ASSET_CATEGORY_LABELS,
+  ASSET_CATEGORY_LABELS, ASSET_CATEGORIES,
   type AssetCategory, type AssetStatus, type PlanFeature, type PlanPoint,
 } from '@/types/database'
 import {
   PointSymbol, LineSymbol, FeatureLabel,
   STATUS_COLORS, LINE_CATEGORIES,
 } from './map/symbols'
+import { rangeLabel, groupAnchor, groupLabelOwner } from './map/labels'
 
 // ─── Types ────────────────────────────────────────────────────
 
@@ -36,6 +37,14 @@ interface PendingPlacement {
   category: AssetCategory
   status: AssetStatus
   mode: 'point' | 'polyline'
+}
+
+/** Quick-add capture: tap-tap-tap placement of brand-new auto-numbered assets. */
+interface QuickAdd {
+  category: AssetCategory
+  mode: 'run' | 'polyline'
+  groupId: string      // shared by every point placed in this run → range label
+  runIds: string[]     // features placed so far in this run
 }
 
 interface SiteMapProps {
@@ -65,7 +74,7 @@ function MapLegend({ features }: { features: PlanFeature[] }) {
   const statuses = Object.keys(STATUS_COLORS) as AssetStatus[]
 
   return (
-    <div className="absolute top-2 right-2 z-30 bg-surface-base/95 backdrop-blur-sm border border-surface-border rounded-xl shadow-xl max-w-[180px] overflow-hidden">
+    <div data-map-ui className="absolute top-2 right-2 z-30 bg-surface-base/95 backdrop-blur-sm border border-surface-border rounded-xl shadow-xl max-w-[180px] overflow-hidden">
       <button
         onClick={() => setCollapsed((c) => !c)}
         className="w-full flex items-center justify-between px-3 py-2 border-b border-surface-border"
@@ -120,7 +129,7 @@ function FeaturePanel({
 }) {
   const c = STATUS_COLORS[feature.status]
   return (
-    <div className="absolute bottom-3 left-1/2 -translate-x-1/2 z-40 bg-surface-raised border border-surface-border rounded-xl shadow-2xl p-3 min-w-[240px] max-w-[90%]">
+    <div data-map-ui className="absolute bottom-3 left-1/2 -translate-x-1/2 z-40 bg-surface-raised border border-surface-border rounded-xl shadow-2xl p-3 min-w-[240px] max-w-[90%]">
       <div className="flex items-center justify-between gap-2 mb-1.5">
         <div className="flex items-center gap-1.5">
           <div className="w-4 h-4 rounded" style={{ backgroundColor: c.bg }} />
@@ -158,6 +167,64 @@ function FeaturePanel({
   )
 }
 
+// ─── Grouped run panel ────────────────────────────────────────
+
+function GroupPanel({
+  features, tapped, onOpen, onUngroup, onRemove, onClose, readOnly,
+}: {
+  features: PlanFeature[]
+  tapped: PlanFeature
+  onOpen: () => void
+  onUngroup: () => void
+  onRemove: () => void
+  onClose: () => void
+  readOnly?: boolean
+}) {
+  const c = STATUS_COLORS[tapped.status]
+  return (
+    <div data-map-ui className="absolute bottom-3 left-1/2 -translate-x-1/2 z-40 bg-surface-raised border border-surface-border rounded-xl shadow-2xl p-3 min-w-[260px] max-w-[90%]">
+      <div className="flex items-center justify-between gap-2 mb-1.5">
+        <div className="flex items-center gap-1.5">
+          <div className="w-4 h-4 rounded" style={{ backgroundColor: c.bg }} />
+          <span className="text-white text-sm font-bold font-mono">{rangeLabel(features)}</span>
+        </div>
+        <button onClick={onClose} className="text-slate-500 hover:text-white transition-colors">
+          <X size={14} />
+        </button>
+      </div>
+      <p className="text-slate-400 text-xs mb-2">
+        {ASSET_CATEGORY_LABELS[tapped.category]} · {features.length} in run ·
+        tapped <span className="font-mono text-slate-300">{tapped.asset_code}</span>
+      </p>
+      {!readOnly && (
+        <div className="flex gap-2">
+          <button
+            onClick={onOpen}
+            className="flex-1 flex items-center justify-center gap-1.5 h-8 rounded-lg bg-brand-orange/10 border border-brand-orange/30 text-brand-orange text-xs font-medium hover:bg-brand-orange/20 transition-colors"
+          >
+            <Link2 size={12} />
+            Open Item
+          </button>
+          <button
+            onClick={onUngroup}
+            className="flex items-center justify-center gap-1.5 h-8 px-3 rounded-lg bg-surface-base border border-surface-border text-slate-300 text-xs font-medium hover:text-white hover:border-brand-orange/40 transition-colors"
+          >
+            <Ungroup size={12} />
+            Ungroup
+          </button>
+          <button
+            onClick={onRemove}
+            className="w-8 h-8 rounded-lg bg-status-noncompliant/10 border border-status-noncompliant/30 flex items-center justify-center text-status-noncompliant hover:bg-status-noncompliant/20 transition-colors"
+            title="Remove all markers in this run (assets stay in the checklist)"
+          >
+            <X size={12} />
+          </button>
+        </div>
+      )}
+    </div>
+  )
+}
+
 // ─── Main component ───────────────────────────────────────────
 
 export function SiteMap({ inspectionId, onMarkerClick, readOnly = false }: SiteMapProps) {
@@ -165,7 +232,7 @@ export function SiteMap({ inspectionId, onMarkerClick, readOnly = false }: SiteM
     sitePlans, activePlanId, planFeatures, saving, siteMapDirty,
     setActivePlan, createSitePlan, uploadSitePlanImage,
     addFeature, updateFeature, removeFeature, saveFeatures,
-    syncFeaturesFromAssets,
+    syncFeaturesFromAssets, quickPlaceAsset, ungroupFeatures,
     assets,
   } = useInspectionStore()
 
@@ -194,7 +261,9 @@ export function SiteMap({ inspectionId, onMarkerClick, readOnly = false }: SiteM
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [showLegend, setShowLegend] = useState(true)
   const [showUnplaced, setShowUnplaced] = useState(false)
+  const [showPalette, setShowPalette] = useState(false)
   const [placing, setPlacing] = useState<PendingPlacement | null>(null)
+  const [quickAdd, setQuickAdd] = useState<QuickAdd | null>(null)
   const [draftPoints, setDraftPoints] = useState<PlanPoint[]>([])
 
   // Gesture bookkeeping (refs — no re-render per move)
@@ -204,10 +273,27 @@ export function SiteMap({ inspectionId, onMarkerClick, readOnly = false }: SiteM
     | { type: 'pinch'; startDist: number; startScale: number; startTx: number; startTy: number; midX: number; midY: number }
     | { type: 'feature'; id: string; lastX: number; lastY: number; moved: boolean }
     | { type: 'vertex'; id: string; index: number }
+    | { type: 'label'; id: string; lastX: number; lastY: number }
     | null
   >(null)
 
   const selectedFeature = features.find((f) => f.id === selectedId) ?? null
+
+  // Range-label groups: features sharing a group_id render one label
+  const groupMap = useMemo(() => {
+    const m = new Map<string, PlanFeature[]>()
+    for (const f of features) {
+      if (!f.group_id) continue
+      const arr = m.get(f.group_id)
+      if (arr) arr.push(f)
+      else m.set(f.group_id, [f])
+    }
+    return m
+  }, [features])
+
+  const selectedGroup = selectedFeature?.group_id
+    ? groupMap.get(selectedFeature.group_id) ?? null
+    : null
 
   // ── Sizing ────────────────────────────────────────────────
 
@@ -320,6 +406,9 @@ export function SiteMap({ inspectionId, onMarkerClick, readOnly = false }: SiteM
   // ── Pointer gestures (pan / pinch / tap / drag) ───────────
 
   const handlePointerDown = (e: ReactPointerEvent) => {
+    // Overlay controls (banners, panels, zoom buttons) are not map surface:
+    // never start a gesture from them, or a tap on ✓ would also place a marker
+    if ((e.target as HTMLElement).closest('[data-map-ui]')) return
     ;(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId)
     pointers.current.set(e.pointerId, { x: e.clientX, y: e.clientY })
 
@@ -416,6 +505,23 @@ export function SiteMap({ inspectionId, onMarkerClick, readOnly = false }: SiteM
       updateFeature(g.id, {
         geometry: f.geometry.map((p, i) => (i === g.index ? norm : p)),
       })
+      return
+    }
+
+    if (g.type === 'label') {
+      const stage = stageRef.current
+      if (!stage) return
+      const rect = stage.getBoundingClientRect()
+      const dx = (e.clientX - g.lastX) / rect.width
+      const dy = (e.clientY - g.lastY) / rect.height
+      g.lastX = e.clientX
+      g.lastY = e.clientY
+      const f = useInspectionStore.getState().planFeatures.find((pf) => pf.id === g.id)
+      if (!f) return
+      const cur = f.label_offset ?? { dx: 0, dy: 0 }
+      updateFeature(g.id, {
+        label_offset: { dx: cur.dx + dx, dy: cur.dy + dy },
+      })
     }
   }
 
@@ -445,6 +551,20 @@ export function SiteMap({ inspectionId, onMarkerClick, readOnly = false }: SiteM
             setDraftPoints((pts) => [...pts, norm])
           }
         }
+      } else if (quickAdd) {
+        const norm = clientToNorm(e.clientX, e.clientY)
+        if (norm) {
+          if (quickAdd.mode === 'run') {
+            // Each tap creates the next auto-numbered asset in the run
+            quickPlaceAsset(quickAdd.category, [norm], { groupId: quickAdd.groupId })
+              .then((f) => {
+                setQuickAdd((q) => (q ? { ...q, runIds: [...q.runIds, f.id] } : q))
+              })
+              .catch(() => { /* store surfaces the error state */ })
+          } else {
+            setDraftPoints((pts) => [...pts, norm])
+          }
+        }
       } else {
         setSelectedId(null)
       }
@@ -470,7 +590,7 @@ export function SiteMap({ inspectionId, onMarkerClick, readOnly = false }: SiteM
   }
 
   const handleFeaturePointerDown = (e: ReactPointerEvent, id: string) => {
-    if (placing) return   // while placing, features shouldn't swallow taps
+    if (placing || quickAdd) return   // while placing, features shouldn't swallow taps
     e.stopPropagation()
     ;(containerRef.current as HTMLElement)?.setPointerCapture?.(e.pointerId)
     pointers.current.set(e.pointerId, { x: e.clientX, y: e.clientY })
@@ -507,6 +627,54 @@ export function SiteMap({ inspectionId, onMarkerClick, readOnly = false }: SiteM
   const cancelPlacing = () => {
     setPlacing(null)
     setDraftPoints([])
+  }
+
+  // ── Quick-add (auto-numbered field capture) ───────────────
+
+  const startQuickAdd = (category: AssetCategory) => {
+    setShowPalette(false)
+    setPlacing(null)
+    setSelectedId(null)
+    setDraftPoints([])
+    setQuickAdd({
+      category,
+      mode: LINE_CATEGORIES.has(category) ? 'polyline' : 'run',
+      groupId: crypto.randomUUID(),
+      runIds: [],
+    })
+  }
+
+  const finishQuickAdd = async () => {
+    if (!quickAdd) return
+    if (quickAdd.mode === 'run') {
+      // A single placement isn't a run — drop its group so it keeps its own label
+      if (quickAdd.runIds.length === 1) {
+        updateFeature(quickAdd.runIds[0], { group_id: null })
+      }
+    } else if (draftPoints.length >= 2) {
+      await quickPlaceAsset(quickAdd.category, draftPoints, { geometryType: 'polyline' })
+    }
+    setDraftPoints([])
+    setQuickAdd(null)
+  }
+
+  const cancelQuickAdd = () => {
+    // Points already placed in the run stay — they're real assets now
+    if (quickAdd?.mode === 'run' && quickAdd.runIds.length === 1) {
+      updateFeature(quickAdd.runIds[0], { group_id: null })
+    }
+    setDraftPoints([])
+    setQuickAdd(null)
+  }
+
+  // ── Label drag (offset + leader line) ─────────────────────
+
+  const handleLabelPointerDown = (e: ReactPointerEvent, id: string) => {
+    if (readOnly || placing || quickAdd) return
+    e.stopPropagation()
+    ;(containerRef.current as HTMLElement)?.setPointerCapture?.(e.pointerId)
+    pointers.current.set(e.pointerId, { x: e.clientX, y: e.clientY })
+    gesture.current = { type: 'label', id, lastX: e.clientX, lastY: e.clientY }
   }
 
   // ── Unplaced assets ───────────────────────────────────────
@@ -631,6 +799,13 @@ export function SiteMap({ inspectionId, onMarkerClick, readOnly = false }: SiteM
       {!readOnly && (
         <div className="flex items-center gap-2 flex-wrap">
           <button
+            onClick={() => { setShowPalette((v) => !v); setShowUnplaced(false) }}
+            className="flex items-center gap-1.5 h-8 px-3 rounded-lg bg-brand-orange text-white text-xs font-bold shadow-md hover:bg-orange-500 transition-all"
+          >
+            <Plus size={13} />
+            Add Asset
+          </button>
+          <button
             onClick={() => fileInputRef.current?.click()}
             className="flex items-center gap-1.5 h-8 px-3 rounded-lg bg-surface-raised border border-surface-border text-slate-300 text-xs hover:border-brand-orange/40 hover:text-white transition-all"
           >
@@ -650,7 +825,7 @@ export function SiteMap({ inspectionId, onMarkerClick, readOnly = false }: SiteM
 
           {unplacedAssets.length > 0 && (
             <button
-              onClick={() => setShowUnplaced((v) => !v)}
+              onClick={() => { setShowUnplaced((v) => !v); setShowPalette(false) }}
               className="flex items-center gap-1.5 h-8 px-3 rounded-lg bg-brand-orange/10 border border-brand-orange/30 text-brand-orange text-xs hover:bg-brand-orange/20 transition-all"
             >
               <MapPin size={13} />
@@ -680,6 +855,42 @@ export function SiteMap({ inspectionId, onMarkerClick, readOnly = false }: SiteM
               Save Map
             </button>
           )}
+        </div>
+      )}
+
+      {/* Quick-add category palette */}
+      {showPalette && !readOnly && (
+        <div className="bg-surface-raised rounded-xl border border-surface-border p-3">
+          <div className="flex items-center justify-between mb-2">
+            <p className="text-white text-xs font-semibold">
+              Pick a category — assets are numbered automatically as you tap the map:
+            </p>
+            <button onClick={() => setShowPalette(false)} className="text-slate-500 hover:text-white">
+              <X size={14} />
+            </button>
+          </div>
+          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-1.5">
+            {ASSET_CATEGORIES.map((cat) => (
+              <button
+                key={cat}
+                onClick={() => startQuickAdd(cat)}
+                className="flex items-center gap-2 px-2 py-1.5 rounded-lg border border-surface-border bg-surface-base hover:border-brand-orange/50 hover:bg-brand-orange/5 transition-all text-left"
+              >
+                <svg viewBox="-12 -12 24 24" className="w-5 h-5 shrink-0">
+                  <PointSymbol category={cat} cx={0} cy={0} s={9} />
+                </svg>
+                <span className="min-w-0">
+                  <span className="flex items-center gap-1 text-white text-[10px] font-mono font-bold">
+                    {cat}
+                    {LINE_CATEGORIES.has(cat) && <Spline size={9} className="text-slate-500" />}
+                  </span>
+                  <span className="block text-slate-500 text-[9px] truncate">
+                    {ASSET_CATEGORY_LABELS[cat]}
+                  </span>
+                </span>
+              </button>
+            ))}
+          </div>
         </div>
       )}
 
@@ -728,7 +939,7 @@ export function SiteMap({ inspectionId, onMarkerClick, readOnly = false }: SiteM
         ref={containerRef}
         className={cn(
           'relative flex-1 min-h-[300px] rounded-xl overflow-hidden border border-surface-border bg-surface-base',
-          placing ? 'cursor-crosshair' : 'cursor-grab active:cursor-grabbing'
+          placing || quickAdd ? 'cursor-crosshair' : 'cursor-grab active:cursor-grabbing'
         )}
         style={{ touchAction: 'none' }}
         onPointerDown={handlePointerDown}
@@ -783,10 +994,51 @@ export function SiteMap({ inspectionId, onMarkerClick, readOnly = false }: SiteM
             {features.map((f) => {
               const pts = f.geometry.map((p) => ({ x: p.x * vb.w, y: p.y * vb.h }))
               if (pts.length === 0) return null
-              const isSelected = f.id === selectedId
+              const group = f.group_id ? groupMap.get(f.group_id) : undefined
+              const isGrouped = !!group && group.length > 1
+              const isGroupOwner = isGrouped && groupLabelOwner(group).id === f.id
+              const isSelected =
+                f.id === selectedId ||
+                (isGrouped && !!selectedFeature && selectedFeature.group_id === f.group_id)
               const anchor = f.geometry_type === 'point'
                 ? pts[0]
                 : pts[Math.floor(pts.length / 2)]
+
+              // Label: grouped runs render one range label at the group's
+              // topmost member; label_offset shifts it and draws a leader line
+              let labelNode = null
+              if (!isGrouped || isGroupOwner) {
+                const gAnchor = isGrouped ? groupAnchor(group) : null
+                const anchorVb = gAnchor
+                  ? { x: gAnchor.x * vb.w, y: gAnchor.y * vb.h }
+                  : anchor
+                const off = f.label_offset ?? { dx: 0, dy: 0 }
+                const lx = anchorVb.x + off.dx * vb.w
+                const ly = anchorVb.y - S * 2.2 + off.dy * vb.h
+                const offsetDist = Math.hypot(lx - anchorVb.x, ly - anchorVb.y)
+                labelNode = (
+                  <>
+                    {offsetDist > S * 3.2 && (
+                      <line
+                        x1={lx} y1={ly}
+                        x2={anchorVb.x} y2={anchorVb.y}
+                        stroke="#ffffff"
+                        strokeWidth={S * 0.1}
+                        opacity={0.85}
+                      />
+                    )}
+                    <FeatureLabel
+                      text={isGrouped ? rangeLabel(group) : (f.label ?? f.asset_code)}
+                      x={lx}
+                      y={ly}
+                      s={S}
+                      status={f.status}
+                      selected={isSelected}
+                      onPointerDown={readOnly ? undefined : (e) => handleLabelPointerDown(e, f.id)}
+                    />
+                  </>
+                )
+              }
 
               return (
                 <g
@@ -816,20 +1068,13 @@ export function SiteMap({ inspectionId, onMarkerClick, readOnly = false }: SiteM
                     />
                   ))}
 
-                  <FeatureLabel
-                    text={f.label ?? f.asset_code}
-                    x={anchor.x}
-                    y={anchor.y - S * 2.2}
-                    s={S}
-                    status={f.status}
-                    selected={isSelected}
-                  />
+                  {labelNode}
                 </g>
               )
             })}
 
             {/* Draft polyline while capturing */}
-            {placing?.mode === 'polyline' && draftPoints.length > 0 && (
+            {(placing?.mode === 'polyline' || quickAdd?.mode === 'polyline') && draftPoints.length > 0 && (
               <g style={{ pointerEvents: 'none' }}>
                 <polyline
                   points={draftPoints.map((p) => `${p.x * vb.w},${p.y * vb.h}`).join(' ')}
@@ -850,7 +1095,7 @@ export function SiteMap({ inspectionId, onMarkerClick, readOnly = false }: SiteM
         {showLegend && <MapLegend features={features} />}
 
         {/* Zoom controls */}
-        <div className="absolute bottom-3 right-3 flex flex-col gap-1.5 z-30">
+        <div data-map-ui className="absolute bottom-3 right-3 flex flex-col gap-1.5 z-30">
           <button
             onClick={() => zoomCentre(1.4)}
             className="w-8 h-8 rounded-lg bg-surface-base/90 border border-surface-border flex items-center justify-center text-slate-300 hover:text-white hover:bg-surface-raised transition-all"
@@ -871,9 +1116,50 @@ export function SiteMap({ inspectionId, onMarkerClick, readOnly = false }: SiteM
           </button>
         </div>
 
+        {/* Quick-add banner: run counter + finish controls */}
+        {quickAdd && (
+          <div data-map-ui className="absolute top-3 left-3 z-30 flex items-center gap-2 bg-surface-base/95 border border-brand-orange/40 rounded-xl px-3 py-2">
+            <svg viewBox="-12 -12 24 24" className="w-4 h-4 shrink-0">
+              <PointSymbol category={quickAdd.category} cx={0} cy={0} s={9} />
+            </svg>
+            <span className="text-white text-xs font-medium">
+              Adding <span className="text-brand-orange font-mono">{quickAdd.category}</span>
+              {quickAdd.mode === 'run' ? (
+                <span className="text-slate-400 ml-1">
+                  · {quickAdd.runIds.length} placed{quickAdd.runIds.length >= 2 ? ' (run)' : ''}
+                </span>
+              ) : (
+                <span className="text-slate-400 ml-1">({draftPoints.length} pts)</span>
+              )}
+            </span>
+            {quickAdd.mode === 'polyline' && (
+              <button
+                onClick={(e) => { e.stopPropagation(); setDraftPoints((p) => p.slice(0, -1)) }}
+                disabled={draftPoints.length === 0}
+                className="w-6 h-6 rounded-md bg-surface-raised border border-surface-border flex items-center justify-center text-slate-300 hover:text-white disabled:opacity-40"
+              >
+                <Undo2 size={12} />
+              </button>
+            )}
+            <button
+              onClick={(e) => { e.stopPropagation(); finishQuickAdd() }}
+              disabled={quickAdd.mode === 'polyline' ? draftPoints.length < 2 : quickAdd.runIds.length === 0}
+              className="w-6 h-6 rounded-md bg-status-compliant flex items-center justify-center text-white disabled:opacity-40"
+            >
+              <Check size={12} />
+            </button>
+            <button
+              onClick={(e) => { e.stopPropagation(); cancelQuickAdd() }}
+              className="text-slate-500 hover:text-white ml-1"
+            >
+              <X size={12} />
+            </button>
+          </div>
+        )}
+
         {/* Placing banner + polyline controls */}
         {placing && (
-          <div className="absolute top-3 left-3 z-30 flex items-center gap-2 bg-surface-base/95 border border-brand-orange/40 rounded-xl px-3 py-2">
+          <div data-map-ui className="absolute top-3 left-3 z-30 flex items-center gap-2 bg-surface-base/95 border border-brand-orange/40 rounded-xl px-3 py-2">
             <span className="text-white text-xs font-medium">
               {placing.mode === 'point' ? 'Placing' : 'Drawing'}{' '}
               <span className="text-brand-orange font-mono">{placing.asset_code}</span>
@@ -909,21 +1195,36 @@ export function SiteMap({ inspectionId, onMarkerClick, readOnly = false }: SiteM
         )}
 
         {/* Feature count */}
-        <div className="absolute bottom-3 left-3 z-30 flex items-center gap-1.5 bg-surface-base/90 border border-surface-border rounded-lg px-2.5 py-1.5">
+        <div data-map-ui className="absolute bottom-3 left-3 z-30 flex items-center gap-1.5 bg-surface-base/90 border border-surface-border rounded-lg px-2.5 py-1.5">
           <MapPin size={11} className="text-brand-orange" />
           <span className="text-white text-[10px] font-bold">{features.length}</span>
           <span className="text-slate-500 text-[10px]">placed</span>
         </div>
 
-        {/* Selected feature panel */}
+        {/* Selected feature / group panel */}
         {selectedFeature && (
-          <FeaturePanel
-            feature={selectedFeature}
-            readOnly={readOnly}
-            onOpen={() => { onMarkerClick?.(selectedFeature.asset_code); setSelectedId(null) }}
-            onRemove={() => { removeFeature(selectedFeature.id); setSelectedId(null) }}
-            onClose={() => setSelectedId(null)}
-          />
+          selectedGroup && selectedGroup.length > 1 ? (
+            <GroupPanel
+              features={selectedGroup}
+              tapped={selectedFeature}
+              readOnly={readOnly}
+              onOpen={() => { onMarkerClick?.(selectedFeature.asset_code); setSelectedId(null) }}
+              onUngroup={() => ungroupFeatures(selectedFeature.group_id!)}
+              onRemove={() => {
+                selectedGroup.forEach((f) => removeFeature(f.id))
+                setSelectedId(null)
+              }}
+              onClose={() => setSelectedId(null)}
+            />
+          ) : (
+            <FeaturePanel
+              feature={selectedFeature}
+              readOnly={readOnly}
+              onOpen={() => { onMarkerClick?.(selectedFeature.asset_code); setSelectedId(null) }}
+              onRemove={() => { removeFeature(selectedFeature.id); setSelectedId(null) }}
+              onClose={() => setSelectedId(null)}
+            />
+          )
         )}
 
         {/* Saving overlay */}
