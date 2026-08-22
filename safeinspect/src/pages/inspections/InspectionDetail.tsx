@@ -4,7 +4,7 @@ import {
   Map, List, BarChart2, ChevronRight,
   AlertTriangle, CheckCircle2, XCircle, Clock,
   FileText, Share2, MoreVertical, Layers,
-  ArrowUpRight, Download, CloudUpload, Loader2,
+  ArrowUpRight, Download, CloudUpload, Loader2, PencilRuler,
 } from 'lucide-react'
 import { format, parseISO } from 'date-fns'
 import { cn } from '@/lib/utils'
@@ -16,6 +16,7 @@ import { SiteMap } from '@/components/inspection/SiteMap'
 import { ASSET_CATEGORIES, ASSET_CATEGORY_LABELS } from '@/types/database'
 import type { AssetCategory } from '@/types/database'
 import { ASSET_STATUS_CONFIG } from '@/lib/inspection-data'
+import { reportTypeConfig } from '@/lib/reportTypes'
 import {
   generateAndDownloadReport,
   generateAndUploadReport,
@@ -30,13 +31,15 @@ type Tab = 'checklist' | 'map' | 'summary'
 // ─── Summary table (mirrors Abseal PDF summary table) ────────
 
 function InspectionSummaryTable({ inspectionId }: { inspectionId: string }) {
-  const { getCategorySummaries } = useInspectionStore()
+  const { getCategorySummaries, activeInspection } = useInspectionStore()
   const summaries = getCategorySummaries()
+  const proposal = reportTypeConfig(activeInspection?.issue_type).isProposal
 
   const totals = summaries.reduce(
     (acc, s) => ({
       total: acc.total + s.total,
-      compliant: acc.compliant + s.compliant,
+      // On a proposal the "good" column counts proposed items, not compliant ones
+      compliant: acc.compliant + (proposal ? s.proposed : s.compliant),
       non_compliant: acc.non_compliant + s.non_compliant,
     }),
     { total: 0, compliant: 0, non_compliant: 0 }
@@ -59,8 +62,14 @@ function InspectionSummaryTable({ inspectionId }: { inspectionId: string }) {
           <tr className="border-b border-surface-border">
             <th className="text-left py-2.5 px-3 text-slate-500 text-[10px] font-semibold uppercase tracking-widest">Category</th>
             <th className="text-center py-2.5 px-2 text-slate-500 text-[10px] font-semibold uppercase tracking-widest w-12">Total</th>
-            <th className="text-center py-2.5 px-2 text-status-compliant text-[10px] font-semibold uppercase tracking-widest w-16">✓</th>
-            <th className="text-center py-2.5 px-2 text-status-noncompliant text-[10px] font-semibold uppercase tracking-widest w-16">✗</th>
+            {proposal ? (
+              <th className="text-center py-2.5 px-2 text-status-proposed text-[10px] font-semibold uppercase tracking-widest w-20">Proposed</th>
+            ) : (
+              <>
+                <th className="text-center py-2.5 px-2 text-status-compliant text-[10px] font-semibold uppercase tracking-widest w-16">✓</th>
+                <th className="text-center py-2.5 px-2 text-status-noncompliant text-[10px] font-semibold uppercase tracking-widest w-16">✗</th>
+              </>
+            )}
           </tr>
         </thead>
         <tbody>
@@ -73,16 +82,26 @@ function InspectionSummaryTable({ inspectionId }: { inspectionId: string }) {
                 </div>
               </td>
               <td className="text-center py-2.5 px-2 text-white font-mono text-xs">{s.total}</td>
-              <td className="text-center py-2.5 px-2">
-                <span className={cn('font-mono text-xs', s.compliant > 0 ? 'text-status-compliant' : 'text-slate-600')}>
-                  {s.compliant}
-                </span>
-              </td>
-              <td className="text-center py-2.5 px-2">
-                <span className={cn('font-mono text-xs font-bold', s.non_compliant > 0 ? 'text-status-noncompliant' : 'text-slate-600')}>
-                  {s.non_compliant}
-                </span>
-              </td>
+              {proposal ? (
+                <td className="text-center py-2.5 px-2">
+                  <span className={cn('font-mono text-xs', s.proposed > 0 ? 'text-status-proposed' : 'text-slate-600')}>
+                    {s.proposed}
+                  </span>
+                </td>
+              ) : (
+                <>
+                  <td className="text-center py-2.5 px-2">
+                    <span className={cn('font-mono text-xs', s.compliant > 0 ? 'text-status-compliant' : 'text-slate-600')}>
+                      {s.compliant}
+                    </span>
+                  </td>
+                  <td className="text-center py-2.5 px-2">
+                    <span className={cn('font-mono text-xs font-bold', s.non_compliant > 0 ? 'text-status-noncompliant' : 'text-slate-600')}>
+                      {s.non_compliant}
+                    </span>
+                  </td>
+                </>
+              )}
             </tr>
           ))}
         </tbody>
@@ -90,8 +109,14 @@ function InspectionSummaryTable({ inspectionId }: { inspectionId: string }) {
           <tr className="border-t-2 border-surface-border">
             <td className="py-3 px-3 text-white text-xs font-bold uppercase tracking-wide">Totals</td>
             <td className="text-center py-3 px-2 text-white font-mono text-xs font-bold">{totals.total}</td>
-            <td className="text-center py-3 px-2 text-status-compliant font-mono text-xs font-bold">{totals.compliant}</td>
-            <td className="text-center py-3 px-2 text-status-noncompliant font-mono text-xs font-bold">{totals.non_compliant}</td>
+            {proposal ? (
+              <td className="text-center py-3 px-2 text-status-proposed font-mono text-xs font-bold">{totals.compliant}</td>
+            ) : (
+              <>
+                <td className="text-center py-3 px-2 text-status-compliant font-mono text-xs font-bold">{totals.compliant}</td>
+                <td className="text-center py-3 px-2 text-status-noncompliant font-mono text-xs font-bold">{totals.non_compliant}</td>
+              </>
+            )}
           </tr>
         </tfoot>
       </table>
@@ -295,11 +320,6 @@ export default function InspectionDetail() {
     await updateInspection(id, { certifier_signature_url: url })
   }
 
-  const handleClientSigned = async (url: string) => {
-    if (!id) return
-    await updateInspection(id, { inspector_signature_url: url })
-  }
-
   if (!activeInspection) {
     return (
       <div className="flex items-center justify-center min-h-[60vh]">
@@ -317,6 +337,8 @@ export default function InspectionDetail() {
 
   const completedCount = assets.filter((a) => a.status !== undefined).length
   const totalCategories = ASSET_CATEGORIES.length
+  const reportType = reportTypeConfig(activeInspection.issue_type)
+  const isProposal = reportType.isProposal
 
   return (
     <div className="max-w-2xl mx-auto lg:max-w-4xl">
@@ -442,8 +464,27 @@ export default function InspectionDetail() {
         {/* SUMMARY TAB */}
         {tab === 'summary' && (
           <div className="space-y-6">
-            {/* Overall status */}
-            {activeInspection.overall_status && (
+            {/* Report type */}
+            <div className="flex items-center gap-3 p-4 rounded-2xl border bg-surface-raised border-surface-border">
+              <FileText size={20} className="text-brand-orange shrink-0" />
+              <div>
+                <p className="text-white font-display text-base font-bold">{reportType.label}</p>
+                <p className="text-slate-500 text-xs">{reportType.description}</p>
+              </div>
+            </div>
+
+            {/* Overall status — a proposal has none, nothing is installed yet */}
+            {isProposal ? (
+              <div className="flex items-center gap-3 p-4 rounded-2xl border bg-status-proposed-bg/10 border-status-proposed/30">
+                <PencilRuler size={22} className="text-status-proposed shrink-0" />
+                <div>
+                  <p className="font-display text-lg font-bold text-status-proposed">Proposed — Not Yet Installed</p>
+                  <p className="text-slate-500 text-xs">
+                    {assets.length} proposed item{assets.length === 1 ? '' : 's'} · no compliance status is reported
+                  </p>
+                </div>
+              </div>
+            ) : activeInspection.overall_status && (
               <div className={cn(
                 'flex items-center gap-3 p-4 rounded-2xl border',
                 activeInspection.overall_status === 'compliant'
@@ -480,7 +521,7 @@ export default function InspectionDetail() {
             <div className="bg-surface-raised rounded-2xl border border-surface-border overflow-hidden">
               <div className="px-4 py-3 border-b border-surface-border">
                 <h3 className="font-display font-bold text-white text-base uppercase tracking-wide">
-                  Inspection Item Summary
+                  {isProposal ? 'Proposed Item Summary' : 'Inspection Item Summary'}
                 </h3>
                 <p className="text-slate-500 text-xs mt-0.5">
                   Per AS1891.4:2009 Section 9 · {format(parseISO(activeInspection.date_of_inspection), 'd MMM yyyy')}
@@ -506,11 +547,8 @@ export default function InspectionDetail() {
             <SignatureSection
               inspectionId={activeInspection.id}
               certifierName={activeInspection.certifier_id}
-              clientName={activeInspection.client_name}
               existingCertifierUrl={activeInspection.certifier_signature_url}
-              existingClientUrl={activeInspection.inspector_signature_url}
               onCertifierSaved={handleCertifierSigned}
-              onClientSaved={handleClientSigned}
             />
 
             {/* Generate report CTA */}

@@ -54,6 +54,12 @@ const OVERALL_STATUS_CONFIG: Record<
     text: 'text-status-recommendation',
     dot: 'bg-status-recommendation',
   },
+  proposed: {
+    label: 'Proposed',
+    bg: 'bg-status-proposed-bg',
+    text: 'text-status-proposed',
+    dot: 'bg-status-proposed',
+  },
 }
 
 const INSPECTION_STATUS_CONFIG: Record<

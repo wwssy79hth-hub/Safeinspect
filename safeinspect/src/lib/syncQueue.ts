@@ -10,7 +10,8 @@ import { devtools, persist } from 'zustand/middleware'
 import { supabase } from '@/lib/supabase'
 import type { Database } from '@/types/database'
 
-type InspectionUpdate = Database['public']['Tables']['inspections']['Update']
+type AssetInsert       = Database['public']['Tables']['inspection_assets']['Insert']
+type InspectionUpdate  = Database['public']['Tables']['inspections']['Update']
 type PlanFeatureInsert = Database['public']['Tables']['plan_features']['Insert']
 
 // ─── Queue item shape ─────────────────────────────────────────
@@ -52,7 +53,7 @@ async function executeOp(op: QueuedOp): Promise<void> {
     case 'upsert_asset': {
       const { error } = await supabase
         .from('inspection_assets')
-        .upsert(op.payload as Record<string, unknown>)
+        .upsert(op.payload as unknown as AssetInsert)
       if (error) throw error
       break
     }

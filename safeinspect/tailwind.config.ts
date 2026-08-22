@@ -29,6 +29,8 @@ const config: Config = {
           'noncompliant-bg':     '#fee2e2',
           recommendation:        '#d97706',
           'recommendation-bg':   '#fef3c7',
+          proposed:              '#2563eb',
+          'proposed-bg':         '#dbeafe',
           na:                    '#64748b',
           'na-bg':               '#f1f5f9',
         },

@@ -2,6 +2,7 @@ import { create } from 'zustand'
 import { devtools, persist } from 'zustand/middleware'
 import { supabase } from '@/lib/supabase'
 import { useSyncQueue } from '@/lib/syncQueue'
+import { defaultAssetStatusFor, isProposalReport } from '@/lib/reportTypes'
 import type {
   Inspection,
   InspectionAsset,
@@ -59,6 +60,7 @@ export interface CategorySummary {
   compliant: number
   non_compliant: number
   recommendation: number
+  proposed: number
   na: number
 }
 
@@ -105,7 +107,13 @@ interface InspectionState {
 
   // ── Assets ───────────────────────────────────────────────────
   loadAssets: (inspectionId: string) => Promise<void>
-  upsertAsset: (asset: Partial<InspectionAsset> & { inspection_id: string; category: AssetCategory }) => Promise<InspectionAsset>
+  upsertAsset: (
+    asset: Partial<InspectionAsset> & {
+      inspection_id: string
+      category: AssetCategory
+      asset_code: string
+    }
+  ) => Promise<InspectionAsset>
   deleteAsset: (assetId: string) => Promise<void>
 
   // ── Site map ─────────────────────────────────────────────────
@@ -127,6 +135,8 @@ interface InspectionState {
   getCategorySummaries: () => CategorySummary[]
   getNextAssetCode: (category: AssetCategory) => string
   getOverallStatus: () => OverallSiteStatus
+  /** Status a newly added asset should start on for the active report type */
+  getDefaultAssetStatus: () => AssetStatus
 
   clearError: () => void
 }
@@ -711,7 +721,7 @@ export const useInspectionStore = create<InspectionState>()(
           for (const asset of assets) {
             const cat = asset.category
             if (!map.has(cat)) {
-              map.set(cat, { category: cat, total: 0, compliant: 0, non_compliant: 0, recommendation: 0, na: 0 })
+              map.set(cat, { category: cat, total: 0, compliant: 0, non_compliant: 0, recommendation: 0, proposed: 0, na: 0 })
             }
             const s = map.get(cat)!
             s.total++
@@ -719,6 +729,7 @@ export const useInspectionStore = create<InspectionState>()(
             if (status === 'compliant') s.compliant++
             else if (status === 'non_compliant') s.non_compliant++
             else if (status === 'recommendation') s.recommendation++
+            else if (status === 'proposed') s.proposed++
             else if (status === 'n/a') s.na++
           }
           return Array.from(map.values())
@@ -731,13 +742,20 @@ export const useInspectionStore = create<InspectionState>()(
         },
 
         getOverallStatus: (): OverallSiteStatus => {
-          const { assets } = get()
+          const { assets, activeInspection } = get()
+          // A proposal describes work not yet done — it has no compliance status.
+          if (isProposalReport(activeInspection?.issue_type)) return 'proposed'
           if (assets.length === 0) return 'compliant'
           const hasNonCompliant = assets.some((a) => a.status === 'non_compliant')
           const hasRecommendation = assets.some((a) => a.status === 'recommendation')
           if (hasNonCompliant) return 'non_compliant'
           if (hasRecommendation) return 'partially_compliant'
           return 'compliant'
+        },
+
+        getDefaultAssetStatus: (): AssetStatus => {
+          const { activeInspection, draft } = get()
+          return defaultAssetStatusFor(activeInspection?.issue_type ?? draft?.issue_type)
         },
 
         clearError: () => set({ error: null }),
@@ -772,7 +790,8 @@ export const selectCategoryProgress = (
   category: AssetCategory
 ) => {
   const assets = s.assetsByCategory[category] ?? []
-  const compliant = assets.filter((a) => a.status === 'compliant').length
+  const positiveStatus = defaultAssetStatusFor(s.activeInspection?.issue_type)
+  const compliant = assets.filter((a) => a.status === positiveStatus).length
   const total = assets.length
   return { total, compliant, pct: total ? Math.round((compliant / total) * 100) : 0 }
 }

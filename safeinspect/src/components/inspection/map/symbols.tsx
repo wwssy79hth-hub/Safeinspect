@@ -17,6 +17,7 @@ export const STATUS_COLORS: Record<AssetStatus, { bg: string; border: string; te
   compliant:      { bg: '#16a34a', border: '#15803d', text: '#ffffff', label: 'Compliant' },
   non_compliant:  { bg: '#dc2626', border: '#b91c1c', text: '#ffffff', label: 'Non-Compliant' },
   recommendation: { bg: '#d97706', border: '#b45309', text: '#ffffff', label: 'Recommendation' },
+  proposed:       { bg: '#2563eb', border: '#1d4ed8', text: '#ffffff', label: 'Proposed' },
   'n/a':          { bg: '#475569', border: '#334155', text: '#ffffff', label: 'N/A' },
 }
 

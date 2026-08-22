@@ -23,9 +23,18 @@ export type OverallSiteStatus =
   | 'compliant'
   | 'non_compliant'
   | 'partially_compliant'
+  | 'proposed'          // design-stage report — nothing installed yet
 
+/**
+ * The kind of report being produced. This drives the document title,
+ * the declaration wording and — critically — how asset statuses are
+ * presented: a proposed anchor installation has no installed hardware,
+ * so its items are reported as PROPOSED, never COMPLIANT.
+ */
 export type IssueType =
   | 'recertification'
+  | 'new_install_verification'
+  | 'proposed_anchor_installation'
   | 'non_compliant_follow_up'
   | 'initial_inspection'
 
@@ -33,6 +42,7 @@ export type AssetStatus =
   | 'compliant'
   | 'non_compliant'
   | 'recommendation'
+  | 'proposed'          // specified but not yet installed
   | 'n/a'
 
 export type Priority = 1 | 2 | 3
@@ -108,6 +118,18 @@ export interface PlanLabelOffset {
   dy: number
 }
 
+// ─── Insert helper ────────────────────────────────────────────
+
+/**
+ * Shape accepted by `.insert()`.
+ *
+ * Only columns the database cannot fill in itself are required: everything
+ * that is nullable or carries a DEFAULT (ids, timestamps, status columns)
+ * is optional. `Req` lists the columns that must be supplied.
+ */
+type Insertable<Row, Req extends keyof Row> =
+  Pick<Row, Req> & Partial<Omit<Row, Req>>
+
 // ─── Database Table Row Types ─────────────────────────────────
 
 export interface Database {
@@ -126,8 +148,11 @@ export interface Database {
           created_at: string
           updated_at: string
         }
-        Insert: Partial<Database['public']['Tables']['profiles']['Row']>
-        Update: Partial<Database['public']['Tables']['profiles']['Insert']>
+        Insert: Insertable<
+          Database['public']['Tables']['profiles']['Row'],
+          'id' | 'email'
+        >
+        Update: Partial<Database['public']['Tables']['profiles']['Row']>
         Relationships: []
       }
 
@@ -158,8 +183,12 @@ export interface Database {
           updated_at: string
           created_by: string
         }
-        Insert: Partial<Database['public']['Tables']['inspections']['Row']>
-        Update: Partial<Database['public']['Tables']['inspections']['Insert']>
+        Insert: Insertable<
+          Database['public']['Tables']['inspections']['Row'],
+          | 'job_number' | 'client_name' | 'site_name' | 'site_address'
+          | 'date_of_inspection' | 'certifier_id' | 'created_by'
+        >
+        Update: Partial<Database['public']['Tables']['inspections']['Row']>
         Relationships: []
       }
 
@@ -180,8 +209,11 @@ export interface Database {
           created_at: string
           updated_at: string
         }
-        Insert: Partial<Database['public']['Tables']['inspection_assets']['Row']>
-        Update: Partial<Database['public']['Tables']['inspection_assets']['Insert']>
+        Insert: Insertable<
+          Database['public']['Tables']['inspection_assets']['Row'],
+          'inspection_id' | 'category' | 'asset_code'
+        >
+        Update: Partial<Database['public']['Tables']['inspection_assets']['Row']>
         Relationships: []
       }
 
@@ -197,8 +229,11 @@ export interface Database {
           created_at: string
           uploaded_by: string
         }
-        Insert: Partial<Database['public']['Tables']['asset_photos']['Row']>
-        Update: Partial<Database['public']['Tables']['asset_photos']['Insert']>
+        Insert: Insertable<
+          Database['public']['Tables']['asset_photos']['Row'],
+          'inspection_id' | 'asset_id' | 'storage_path' | 'uploaded_by'
+        >
+        Update: Partial<Database['public']['Tables']['asset_photos']['Row']>
         Relationships: []
       }
 
@@ -217,8 +252,11 @@ export interface Database {
           created_at: string
           updated_at: string
         }
-        Insert: Partial<Database['public']['Tables']['site_plans']['Row']>
-        Update: Partial<Database['public']['Tables']['site_plans']['Insert']>
+        Insert: Insertable<
+          Database['public']['Tables']['site_plans']['Row'],
+          'inspection_id'
+        >
+        Update: Partial<Database['public']['Tables']['site_plans']['Row']>
         Relationships: []
       }
 
@@ -239,8 +277,12 @@ export interface Database {
           created_at: string
           updated_at: string
         }
-        Insert: Partial<Database['public']['Tables']['plan_features']['Row']>
-        Update: Partial<Database['public']['Tables']['plan_features']['Insert']>
+        Insert: Insertable<
+          Database['public']['Tables']['plan_features']['Row'],
+          'site_plan_id' | 'inspection_id' | 'asset_code' | 'category'
+          | 'status' | 'geometry_type' | 'geometry'
+        >
+        Update: Partial<Database['public']['Tables']['plan_features']['Row']>
         Relationships: []
       }
 
@@ -254,8 +296,11 @@ export interface Database {
           non_compliant: number
           updated_at: string
         }
-        Insert: Partial<Database['public']['Tables']['inspection_summary']['Row']>
-        Update: Partial<Database['public']['Tables']['inspection_summary']['Insert']>
+        Insert: Insertable<
+          Database['public']['Tables']['inspection_summary']['Row'],
+          'inspection_id' | 'category' | 'total' | 'compliant' | 'non_compliant'
+        >
+        Update: Partial<Database['public']['Tables']['inspection_summary']['Row']>
         Relationships: []
       }
     }

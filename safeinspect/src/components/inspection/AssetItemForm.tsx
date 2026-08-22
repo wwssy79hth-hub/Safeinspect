@@ -5,11 +5,12 @@ import {
   Camera, ImagePlus, X, MapPin, CheckCircle2, XCircle,
   AlertCircle, MinusCircle, ChevronDown, Trash2, Save,
   RotateCcw, AlertTriangle, ChevronRight, Zap, ClipboardList,
-  BookOpen, Hash, Navigation2,
+  BookOpen, Hash, Navigation2, PencilRuler,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useAuthStore } from '@/store/auth.store'
 import { useInspectionStore } from '@/store/inspection.store'
+import { allowedAssetStatusesFor, defaultAssetStatusFor } from '@/lib/reportTypes'
 import { usePhotoCapture } from '@/hooks/usePhotoCapture'
 import {
   QUICK_FILL_OPTIONS,
@@ -52,6 +53,7 @@ const STATUS_OPTIONS: { value: AssetStatus; label: string; icon: typeof CheckCir
   { value: 'compliant',      label: 'Compliant',      icon: CheckCircle2 },
   { value: 'non_compliant',  label: 'Non-Compliant',  icon: XCircle      },
   { value: 'recommendation', label: 'Recommendation', icon: AlertCircle  },
+  { value: 'proposed',       label: 'Proposed',       icon: PencilRuler  },
   { value: 'n/a',            label: 'N/A',            icon: MinusCircle  },
 ]
 
@@ -121,29 +123,34 @@ function PhotoStrip(props: ReturnType<typeof usePhotoCapture>) {
 // ─── Smart quick-fill panel ───────────────────────────────────
 
 function QuickFillPanel({
-  category, currentStatus, onApply,
+  category, currentStatus, allowedStatuses, onApply,
 }: {
   category: AssetCategory
   currentStatus: AssetStatus
+  /** Statuses valid for this report type — others are hidden */
+  allowedStatuses: AssetStatus[]
   onApply: (opt: QuickFillOption) => void
 }) {
   const [open, setOpen] = useState(false)
-  const options = QUICK_FILL_OPTIONS[category] ?? []
+  const options = (QUICK_FILL_OPTIONS[category] ?? []).filter(
+    (o) => allowedStatuses.includes(o.status)
+  )
   if (options.length === 0) return null
 
-  const statusOrder: AssetStatus[] = ['compliant', 'non_compliant', 'recommendation', 'n/a']
+  const statusOrder: AssetStatus[] = ['compliant', 'non_compliant', 'recommendation', 'proposed', 'n/a']
   const grouped = statusOrder.reduce<Record<AssetStatus, QuickFillOption[]>>(
     (acc, s) => { acc[s] = options.filter((o) => o.status === s); return acc },
-    { compliant: [], non_compliant: [], recommendation: [], 'n/a': [] }
+    { compliant: [], non_compliant: [], recommendation: [], proposed: [], 'n/a': [] }
   )
 
   const statusLabel: Record<AssetStatus, string> = {
     compliant: 'Compliant', non_compliant: 'Non-Compliant',
-    recommendation: 'Recommendation', 'n/a': 'N/A',
+    recommendation: 'Recommendation', proposed: 'Proposed', 'n/a': 'N/A',
   }
   const statusColor: Record<AssetStatus, string> = {
     compliant: 'text-status-compliant', non_compliant: 'text-status-noncompliant',
-    recommendation: 'text-status-recommendation', 'n/a': 'text-slate-400',
+    recommendation: 'text-status-recommendation', proposed: 'text-status-proposed',
+    'n/a': 'text-slate-400',
   }
 
   return (
@@ -288,7 +295,17 @@ export function AssetItemForm({
   inspectionId, category, asset, onSaved, onOpenMap, onDeleted, defaultExpanded = false,
 }: AssetItemFormProps) {
   const user = useAuthStore((s) => s.user)
-  const { upsertAsset, deleteAsset, getNextAssetCode, saving, updateFeature, planFeatures } = useInspectionStore()
+  const {
+    upsertAsset, deleteAsset, getNextAssetCode, saving, updateFeature, planFeatures,
+    activeInspection,
+  } = useInspectionStore()
+
+  // The report type decides which statuses make sense here: a proposed
+  // anchor installation has nothing installed, so nothing can be compliant.
+  const issueType      = activeInspection?.issue_type
+  const defaultStatus  = defaultAssetStatusFor(issueType)
+  const allowedStatuses = allowedAssetStatusesFor(issueType)
+  const statusOptions  = STATUS_OPTIONS.filter((o) => allowedStatuses.includes(o.value))
 
   const isNew = !asset
   const [expanded, setExpanded] = useState(defaultExpanded || isNew)
@@ -300,7 +317,7 @@ export function AssetItemForm({
   const [form, setForm] = useState<FormState>(() => ({
     asset_code:          asset?.asset_code ?? getNextAssetCode(category),
     location_on_site:    asset?.location_on_site ?? '',
-    status:              (asset?.status as AssetStatus) ?? 'compliant',
+    status:              (asset?.status as AssetStatus) ?? defaultStatus,
     priority:            (asset?.priority as Priority | null) ?? null,
     finding:             asset?.finding ?? '',
     standard_referenced: asset?.standard_referenced ?? getDefaultStandard(category),
@@ -327,7 +344,7 @@ export function AssetItemForm({
 
   // Auto-clear priority when status doesn't need it
   useEffect(() => {
-    if ((form.status === 'compliant' || form.status === 'n/a') && form.priority !== null) {
+    if ((form.status === 'compliant' || form.status === 'proposed' || form.status === 'n/a') && form.priority !== null) {
       setForm((p) => ({ ...p, priority: null }))
     }
   }, [form.status]) // eslint-disable-line
@@ -346,7 +363,7 @@ export function AssetItemForm({
 
   const needsPriority  = form.status === 'non_compliant' || form.status === 'recommendation'
   const statusCfg      = ASSET_STATUS_CONFIG[form.status]
-  const StatusIcon     = STATUS_OPTIONS.find((s) => s.value === form.status)!.icon
+  const StatusIcon     = (STATUS_OPTIONS.find((s) => s.value === form.status) ?? STATUS_OPTIONS[0]).icon
   const hasChecklist   = (INSPECTION_CHECKLIST[category] ?? []).length > 0
 
   // ── Save ────────────────────────────────────────────────────
@@ -386,7 +403,7 @@ export function AssetItemForm({
     setForm({
       asset_code:          asset?.asset_code ?? getNextAssetCode(category),
       location_on_site:    asset?.location_on_site ?? '',
-      status:              (asset?.status as AssetStatus) ?? 'compliant',
+      status:              (asset?.status as AssetStatus) ?? defaultStatus,
       priority:            (asset?.priority as Priority | null) ?? null,
       finding:             asset?.finding ?? '',
       standard_referenced: asset?.standard_referenced ?? getDefaultStandard(category),
@@ -514,6 +531,7 @@ export function AssetItemForm({
                 <QuickFillPanel
                   category={category}
                   currentStatus={form.status}
+                  allowedStatuses={allowedStatuses}
                   onApply={applyQuickFill}
                 />
               }
@@ -521,7 +539,7 @@ export function AssetItemForm({
               Status
             </FieldLabel>
             <div className="grid grid-cols-2 gap-2">
-              {STATUS_OPTIONS.map(({ value, label, icon: Icon }) => {
+              {statusOptions.map(({ value, label, icon: Icon }) => {
                 const cfg = ASSET_STATUS_CONFIG[value]
                 const sel = form.status === value
                 return (
