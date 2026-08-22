@@ -8,6 +8,10 @@
 import { create } from 'zustand'
 import { devtools, persist } from 'zustand/middleware'
 import { supabase } from '@/lib/supabase'
+import type { Database } from '@/types/database'
+
+type AssetInsert      = Database['public']['Tables']['inspection_assets']['Insert']
+type InspectionUpdate = Database['public']['Tables']['inspections']['Update']
 
 // ─── Queue item shape ─────────────────────────────────────────
 
@@ -47,7 +51,7 @@ async function executeOp(op: QueuedOp): Promise<void> {
     case 'upsert_asset': {
       const { error } = await supabase
         .from('inspection_assets')
-        .upsert(op.payload as Record<string, unknown>)
+        .upsert(op.payload as unknown as AssetInsert)
       if (error) throw error
       break
     }
@@ -63,7 +67,7 @@ async function executeOp(op: QueuedOp): Promise<void> {
       const { id, ...patch } = op.payload
       const { error } = await supabase
         .from('inspections')
-        .update(patch)
+        .update(patch as InspectionUpdate)
         .eq('id', id as string)
       if (error) throw error
       break
@@ -72,7 +76,10 @@ async function executeOp(op: QueuedOp): Promise<void> {
       const { id, notes, drawing_scaled } = op.payload
       const { error } = await supabase
         .from('inspections')
-        .update({ notes, drawing_scaled })
+        .update({
+          notes: notes as string | null,
+          drawing_scaled: drawing_scaled as boolean | null,
+        })
         .eq('id', id as string)
       if (error) throw error
       break

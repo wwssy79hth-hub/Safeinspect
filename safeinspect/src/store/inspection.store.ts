@@ -102,7 +102,13 @@ interface InspectionState {
 
   // ── Assets ───────────────────────────────────────────────────
   loadAssets: (inspectionId: string) => Promise<void>
-  upsertAsset: (asset: Partial<InspectionAsset> & { inspection_id: string; category: AssetCategory }) => Promise<InspectionAsset>
+  upsertAsset: (
+    asset: Partial<InspectionAsset> & {
+      inspection_id: string
+      category: AssetCategory
+      asset_code: string
+    }
+  ) => Promise<InspectionAsset>
   deleteAsset: (assetId: string) => Promise<void>
 
   // ── Site map ─────────────────────────────────────────────────

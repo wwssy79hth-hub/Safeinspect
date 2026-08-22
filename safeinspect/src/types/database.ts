@@ -102,6 +102,18 @@ export const ASSET_CATEGORIES: AssetCategory[] = Object.keys(
   ASSET_CATEGORY_LABELS
 ) as AssetCategory[]
 
+// ─── Insert helper ────────────────────────────────────────────
+
+/**
+ * Shape accepted by `.insert()`.
+ *
+ * Only columns the database cannot fill in itself are required: everything
+ * that is nullable or carries a DEFAULT (ids, timestamps, status columns)
+ * is optional. `Req` lists the columns that must be supplied.
+ */
+type Insertable<Row, Req extends keyof Row> =
+  Pick<Row, Req> & Partial<Omit<Row, Req>>
+
 // ─── Database Table Row Types ─────────────────────────────────
 
 export interface Database {
@@ -120,8 +132,12 @@ export interface Database {
           created_at: string
           updated_at: string
         }
-        Insert: Omit<Database['public']['Tables']['profiles']['Row'], 'created_at' | 'updated_at'>
-        Update: Partial<Database['public']['Tables']['profiles']['Insert']>
+        Insert: Insertable<
+          Database['public']['Tables']['profiles']['Row'],
+          'id' | 'email'
+        >
+        Update: Partial<Database['public']['Tables']['profiles']['Row']>
+        Relationships: []
       }
 
       inspections: {
@@ -151,11 +167,13 @@ export interface Database {
           updated_at: string
           created_by: string
         }
-        Insert: Omit<
+        Insert: Insertable<
           Database['public']['Tables']['inspections']['Row'],
-          'id' | 'created_at' | 'updated_at'
+          | 'job_number' | 'client_name' | 'site_name' | 'site_address'
+          | 'date_of_inspection' | 'certifier_id' | 'created_by'
         >
-        Update: Partial<Database['public']['Tables']['inspections']['Insert']>
+        Update: Partial<Database['public']['Tables']['inspections']['Row']>
+        Relationships: []
       }
 
       inspection_assets: {
@@ -175,11 +193,12 @@ export interface Database {
           created_at: string
           updated_at: string
         }
-        Insert: Omit<
+        Insert: Insertable<
           Database['public']['Tables']['inspection_assets']['Row'],
-          'id' | 'created_at' | 'updated_at'
+          'inspection_id' | 'category' | 'asset_code'
         >
-        Update: Partial<Database['public']['Tables']['inspection_assets']['Insert']>
+        Update: Partial<Database['public']['Tables']['inspection_assets']['Row']>
+        Relationships: []
       }
 
       asset_photos: {
@@ -194,11 +213,12 @@ export interface Database {
           created_at: string
           uploaded_by: string
         }
-        Insert: Omit<
+        Insert: Insertable<
           Database['public']['Tables']['asset_photos']['Row'],
-          'id' | 'created_at'
+          'inspection_id' | 'asset_id' | 'storage_path' | 'uploaded_by'
         >
-        Update: Partial<Database['public']['Tables']['asset_photos']['Insert']>
+        Update: Partial<Database['public']['Tables']['asset_photos']['Row']>
+        Relationships: []
       }
 
       inspection_summary: {
@@ -211,11 +231,12 @@ export interface Database {
           non_compliant: number
           updated_at: string
         }
-        Insert: Omit<
+        Insert: Insertable<
           Database['public']['Tables']['inspection_summary']['Row'],
-          'id' | 'updated_at'
+          'inspection_id' | 'category' | 'total' | 'compliant' | 'non_compliant'
         >
-        Update: Partial<Database['public']['Tables']['inspection_summary']['Insert']>
+        Update: Partial<Database['public']['Tables']['inspection_summary']['Row']>
+        Relationships: []
       }
     }
 
