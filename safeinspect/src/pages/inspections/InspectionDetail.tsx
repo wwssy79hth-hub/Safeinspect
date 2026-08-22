@@ -319,11 +319,6 @@ export default function InspectionDetail() {
     await updateInspection(id, { certifier_signature_url: url })
   }
 
-  const handleClientSigned = async (url: string) => {
-    if (!id) return
-    await updateInspection(id, { inspector_signature_url: url })
-  }
-
   if (!activeInspection) {
     return (
       <div className="flex items-center justify-center min-h-[60vh]">
@@ -551,11 +546,8 @@ export default function InspectionDetail() {
             <SignatureSection
               inspectionId={activeInspection.id}
               certifierName={activeInspection.certifier_id}
-              clientName={activeInspection.client_name}
               existingCertifierUrl={activeInspection.certifier_signature_url}
-              existingClientUrl={activeInspection.inspector_signature_url}
               onCertifierSaved={handleCertifierSigned}
-              onClientSaved={handleClientSigned}
             />
 
             {/* Generate report CTA */}

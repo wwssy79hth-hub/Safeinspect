@@ -1,12 +1,12 @@
 import { useRef, useState, useCallback } from 'react'
 import SignatureCanvas from 'react-signature-canvas'
-import { CheckCircle2, RotateCcw, Save, PenTool, User, Users, AlertCircle, Upload } from 'lucide-react'
+import { CheckCircle2, RotateCcw, Save, PenTool, User, AlertCircle, Upload } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { supabase } from '@/lib/supabase'
 
 // ─── Types ────────────────────────────────────────────────────
 
-export type SignatureRole = 'certifier' | 'client'
+export type SignatureRole = 'certifier'
 
 export interface SignatureResult {
   role: SignatureRole
@@ -85,7 +85,7 @@ function SinglePad({
     }
   }, [inspectionId, role, onSaved])
 
-  const roleIcon = role === 'certifier' ? User : Users
+  const roleIcon = User
 
   return (
     <div className={cn(
@@ -226,23 +226,17 @@ function SinglePad({
 interface SignatureSectionProps {
   inspectionId: string
   certifierName?: string
-  clientName?: string
   existingCertifierUrl?: string | null
-  existingClientUrl?: string | null
   onCertifierSaved: (url: string) => void
-  onClientSaved: (url: string) => void
 }
 
 export function SignatureSection({
   inspectionId,
   certifierName,
-  clientName,
   existingCertifierUrl,
-  existingClientUrl,
   onCertifierSaved,
-  onClientSaved,
 }: SignatureSectionProps) {
-  const bothSigned = !!(existingCertifierUrl && existingClientUrl)
+  const signed = !!existingCertifierUrl
 
   return (
     <div className="bg-surface-raised rounded-2xl border border-surface-border overflow-hidden">
@@ -251,25 +245,25 @@ export function SignatureSection({
         <div className="flex items-center gap-3">
           <div className={cn(
             'w-9 h-9 rounded-xl flex items-center justify-center',
-            bothSigned ? 'bg-status-compliant-bg' : 'bg-brand-orange/10'
+            signed ? 'bg-status-compliant-bg' : 'bg-brand-orange/10'
           )}>
-            {bothSigned
+            {signed
               ? <CheckCircle2 size={18} className="text-status-compliant" />
               : <PenTool size={18} className="text-brand-orange" />
             }
           </div>
           <div>
             <h3 className="font-display font-bold text-white text-base uppercase tracking-wide">
-              Signatures
+              Signature
             </h3>
             <p className="text-slate-500 text-xs">
-              {bothSigned ? 'Both signatures captured' : 'Required for final report'}
+              {signed ? 'Certifier signature captured' : 'Required for final report'}
             </p>
           </div>
         </div>
       </div>
 
-      <div className="p-4 space-y-4">
+      <div className="p-4">
         <SinglePad
           inspectionId={inspectionId}
           role="certifier"
@@ -277,14 +271,6 @@ export function SignatureSection({
           sublabel={certifierName ?? 'Accredited Inspector'}
           existingUrl={existingCertifierUrl}
           onSaved={(r) => onCertifierSaved(r.storageUrl)}
-        />
-        <SinglePad
-          inspectionId={inspectionId}
-          role="client"
-          label="Client / Representative Signature"
-          sublabel={clientName ?? 'Client Representative'}
-          existingUrl={existingClientUrl}
-          onSaved={(r) => onClientSaved(r.storageUrl)}
         />
       </div>
     </div>
