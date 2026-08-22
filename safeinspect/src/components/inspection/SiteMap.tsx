@@ -24,7 +24,7 @@ import {
   type AssetCategory, type AssetStatus, type PlanFeature, type PlanPoint,
 } from '@/types/database'
 import {
-  PointSymbol, LineSymbol, FeatureLabel,
+  LineSymbol, FeatureLabel,
   STATUS_COLORS, LINE_CATEGORIES,
 } from './map/symbols'
 import { rangeLabel, groupAnchor, groupLabelOwner } from './map/labels'
@@ -876,11 +876,8 @@ export function SiteMap({ inspectionId, onMarkerClick, readOnly = false }: SiteM
                 onClick={() => startQuickAdd(cat)}
                 className="flex items-center gap-2 px-2 py-1.5 rounded-lg border border-surface-border bg-surface-base hover:border-brand-orange/50 hover:bg-brand-orange/5 transition-all text-left"
               >
-                <svg viewBox="-12 -12 24 24" className="w-5 h-5 shrink-0">
-                  <PointSymbol category={cat} cx={0} cy={0} s={9} />
-                </svg>
                 <span className="min-w-0">
-                  <span className="flex items-center gap-1 text-white text-[10px] font-mono font-bold">
+                  <span className="flex items-center gap-1 text-brand-orange text-[10px] font-mono font-bold">
                     {cat}
                     {LINE_CATEGORIES.has(cat) && <Spline size={9} className="text-slate-500" />}
                   </span>
@@ -1051,7 +1048,13 @@ export function SiteMap({ inspectionId, onMarkerClick, readOnly = false }: SiteM
                       {isSelected && (
                         <circle cx={pts[0].x} cy={pts[0].y} r={S * 1.6} fill="none" stroke="#ffffff" strokeWidth={S * 0.18} opacity={0.8} />
                       )}
-                      <PointSymbol category={f.category} cx={pts[0].x} cy={pts[0].y} s={S} />
+                      {/* Classic pin: status-coloured dot with white ring */}
+                      <circle
+                        cx={pts[0].x} cy={pts[0].y} r={S * 0.6}
+                        fill={STATUS_COLORS[f.status].bg}
+                        stroke="#ffffff"
+                        strokeWidth={S * 0.2}
+                      />
                     </>
                   ) : (
                     <LineSymbol feature={f} points={pts} s={S} selected={isSelected} />
@@ -1119,9 +1122,6 @@ export function SiteMap({ inspectionId, onMarkerClick, readOnly = false }: SiteM
         {/* Quick-add banner: run counter + finish controls */}
         {quickAdd && (
           <div data-map-ui className="absolute top-3 left-3 z-30 flex items-center gap-2 bg-surface-base/95 border border-brand-orange/40 rounded-xl px-3 py-2">
-            <svg viewBox="-12 -12 24 24" className="w-4 h-4 shrink-0">
-              <PointSymbol category={quickAdd.category} cx={0} cy={0} s={9} />
-            </svg>
             <span className="text-white text-xs font-medium">
               Adding <span className="text-brand-orange font-mono">{quickAdd.category}</span>
               {quickAdd.mode === 'run' ? (
@@ -1246,10 +1246,7 @@ export function SiteMap({ inspectionId, onMarkerClick, readOnly = false }: SiteM
         <div className="grid grid-cols-2 sm:grid-cols-3 gap-x-4 gap-y-1 mt-2">
           {(Object.entries(ASSET_CATEGORY_LABELS) as [AssetCategory, string][]).map(([code, label]) => (
             <div key={code} className="flex items-center gap-1.5">
-              <svg viewBox="-12 -12 24 24" className="w-4 h-4 shrink-0">
-                <PointSymbol category={code} cx={0} cy={0} s={9} />
-              </svg>
-              <span className="text-brand-orange text-[9px] font-mono font-bold w-8 shrink-0">{code}</span>
+              <span className="text-brand-orange text-[9px] font-mono font-bold w-10 shrink-0">{code}</span>
               <span className="text-slate-500 text-[10px] truncate">{label}</span>
             </div>
           ))}
