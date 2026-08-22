@@ -8,7 +8,7 @@
 // ============================================================
 
 import jsPDF from 'jspdf'
-import autoTable from 'jspdf-autotable'
+import autoTable, { type RowInput } from 'jspdf-autotable'
 import { format, parseISO, addYears } from 'date-fns'
 import { supabase } from '@/lib/supabase'
 import { ASSET_CATEGORY_LABELS, ASSET_CATEGORIES } from '@/types/database'
@@ -480,7 +480,7 @@ function drawSummaryPage(d: PDFDrawer, data: ReportData) {
   d.y += 10
 
   // Summary table
-  const tableRows: (string | { content: string; styles: object })[][] = []
+  const tableRows: RowInput[] = []
   for (const cat of ASSET_CATEGORIES) {
     const s = catMap.get(cat)
     if (!s) continue   // skip categories with no items
@@ -550,7 +550,7 @@ async function drawCategorySection(
   drawSectionHeading(d, label, `Code prefix: ${category}-001, ${category}-002, ${category}-003 …`)
 
   // Asset table (code, location, status, priority)
-  const tableRows = catAssets.map((a) => {
+  const tableRows: RowInput[] = catAssets.map((a) => {
     const sc = statusColors(a.status)
     const prioLabel = a.priority ? priorityLabel(a.priority) : '—'
     return [
@@ -779,7 +779,7 @@ function drawRecommendationsSummary(d: PDFDrawer, data: ReportData) {
     d.text(priorityTitles[p], M.l + 5, d.y + 5.5, { size: 8, bold: true, color: pc.text })
     d.y += 9
 
-    const rows = grp.map((a) => [
+    const rows: RowInput[] = grp.map((a) => [
       { content: a.asset_code, styles: { fontStyle: 'bold', font: 'courier', textColor: C.navy } },
       ASSET_CATEGORY_LABELS[a.category as AssetCategory],
       a.finding ?? '—',
