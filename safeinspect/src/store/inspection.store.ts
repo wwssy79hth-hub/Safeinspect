@@ -4,7 +4,7 @@ import { supabase } from '@/lib/supabase'
 import { useSyncQueue, isOfflineError } from '@/lib/syncQueue'
 import { resolveStorageUrl } from '@/lib/storageUrls'
 import { defaultAssetStatusFor, isProposalReport } from '@/lib/reportTypes'
-import { DEFAULT_STANDARD } from '@/lib/inspection-data'
+import { DEFAULT_STANDARD, getDefaultStandard } from '@/lib/inspection-data'
 import { findOrCreateSite } from '@/lib/registry'
 import type {
   Inspection,
@@ -669,6 +669,7 @@ export const useInspectionStore = create<InspectionState>()(
           const assetRow: InspectionAsset = {
             id: crypto.randomUUID(),
             inspection_id: activeInspectionId,
+            asset_id: null,   // registry link is filled in by later syncs
             category,
             asset_code: assetCode,
             location_on_site: null,
@@ -676,7 +677,7 @@ export const useInspectionStore = create<InspectionState>()(
             status,
             priority: null,
             finding: null,
-            standard_referenced: 'AS/NZS 1891.4:2009',
+            standard_referenced: getDefaultStandard(category),
             corrective_action: null,
             sort_order: get().assetsByCategory[category]?.length ?? 0,
             created_at: now,
@@ -711,7 +712,7 @@ export const useInspectionStore = create<InspectionState>()(
               .upsert(insertRow)
             if (error) throw error
           } catch {
-            useSyncQueue.getState().enqueue('upsert_asset', insertRow)
+            useSyncQueue.getState().enqueue('upsert_asset', assetCode, insertRow)
           }
 
           return feature

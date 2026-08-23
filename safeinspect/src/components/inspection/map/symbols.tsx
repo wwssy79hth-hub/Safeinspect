@@ -23,7 +23,13 @@ export const STATUS_COLORS: Record<AssetStatus, { bg: string; border: string; te
 
 // ─── Symbol styles ────────────────────────────────────────────
 
-type SymbolKind = 'circle' | 'square' | 'diamond' | 'crossCircle' | 'ladder' | 'hatchRect'
+type SymbolKind =
+  | 'circle' | 'square' | 'diamond' | 'crossCircle' | 'ladder' | 'hatchRect'
+  // Abseal drawing-language glyphs
+  | 'ringDot'      // anchor point: filled dot inside a dashed ring
+  | 'dbCross'      // davit base: dark square with a cross ("DBn")
+  | 'davit'        // davit arm: mast with horizontal jib
+  | 'needleDavit'  // needle davit: mast with raked needle boom
 
 interface PointSymbolStyle {
   kind: SymbolKind
@@ -50,8 +56,8 @@ export const LINE_CATEGORIES: ReadonlySet<AssetCategory> = new Set([
 export const POINT_SYMBOLS: Record<AssetCategory, PointSymbolStyle> = {
   APS:  { kind: 'square',      fill: '#f59e0b', stroke: '#b45309' },
   ST:   { kind: 'circle',      fill: '#38bdf8', stroke: '#0369a1' },
-  TMAP: { kind: 'crossCircle', fill: '#fb923c', stroke: '#c2410c' },
-  CAP:  { kind: 'crossCircle', fill: '#facc15', stroke: '#a16207' },
+  TMAP: { kind: 'ringDot',     fill: '#22c55e', stroke: '#15803d' },
+  CAP:  { kind: 'ringDot',     fill: '#22d3ee', stroke: '#0e7490' },
   HSL:  { kind: 'square',      fill: '#ec4899', stroke: '#be185d' },
   VSL:  { kind: 'square',      fill: '#d946ef', stroke: '#a21caf' },
   LD:   { kind: 'ladder',      fill: '#a78bfa', stroke: '#6d28d9' },
@@ -64,7 +70,9 @@ export const POINT_SYMBOLS: Record<AssetCategory, PointSymbolStyle> = {
   PL:   { kind: 'hatchRect',   fill: '#c4b5fd', stroke: '#6d28d9' },
   GHK:  { kind: 'square',      fill: '#2dd4bf', stroke: '#0f766e' },
   SS:   { kind: 'crossCircle', fill: '#fdba74', stroke: '#c2410c' },
-  DB:   { kind: 'square',      fill: '#2563eb', stroke: '#1e3a8a' },
+  DB:   { kind: 'dbCross',     fill: '#1e293b', stroke: '#0f172a' },
+  DA:   { kind: 'davit',       fill: '#1d4ed8', stroke: '#1e3a8a' },
+  DN:   { kind: 'needleDavit', fill: '#7c3aed', stroke: '#5b21b6' },
   RR:   { kind: 'square',      fill: '#818cf8', stroke: '#4338ca' },
   SPM:  { kind: 'hatchRect',   fill: '#93c5fd', stroke: '#1d4ed8' },
   OSE:  { kind: 'diamond',     fill: '#94a3b8', stroke: '#475569' },
@@ -96,6 +104,49 @@ export function PointSymbol({
   switch (style.kind) {
     case 'circle':
       return <circle cx={cx} cy={cy} r={s} fill={style.fill} stroke={style.stroke} strokeWidth={sw} />
+
+    case 'ringDot':
+      return (
+        <g>
+          <circle
+            cx={cx} cy={cy} r={s}
+            fill="none" stroke={style.stroke} strokeWidth={sw * 0.8}
+            strokeDasharray={`${s * 0.35} ${s * 0.28}`}
+          />
+          <circle cx={cx} cy={cy} r={s * 0.55} fill={style.fill} stroke="#ffffff" strokeWidth={sw * 0.6} />
+        </g>
+      )
+
+    case 'dbCross':
+      return (
+        <g>
+          <rect
+            x={cx - s} y={cy - s} width={s * 2} height={s * 2}
+            fill={style.fill} stroke="#ffffff" strokeWidth={sw * 0.7}
+          />
+          <line x1={cx - s * 0.55} y1={cy - s * 0.55} x2={cx + s * 0.55} y2={cy + s * 0.55} stroke="#ffffff" strokeWidth={sw * 0.7} />
+          <line x1={cx - s * 0.55} y1={cy + s * 0.55} x2={cx + s * 0.55} y2={cy - s * 0.55} stroke="#ffffff" strokeWidth={sw * 0.7} />
+        </g>
+      )
+
+    case 'davit':
+      return (
+        <g stroke={style.fill} strokeWidth={sw * 1.3} strokeLinecap="round" fill="none">
+          <line x1={cx - s * 0.9} y1={cy + s} x2={cx - s * 0.9} y2={cy - s} />
+          <line x1={cx - s * 0.9} y1={cy - s} x2={cx + s} y2={cy - s} />
+          <line x1={cx + s} y1={cy - s} x2={cx + s} y2={cy - s * 0.3} />
+          <circle cx={cx - s * 0.9} cy={cy + s} r={sw} fill={style.fill} stroke="none" />
+        </g>
+      )
+
+    case 'needleDavit':
+      return (
+        <g stroke={style.fill} strokeWidth={sw * 1.3} strokeLinecap="round" fill="none">
+          <line x1={cx - s * 0.9} y1={cy + s} x2={cx - s * 0.9} y2={cy - s * 0.2} />
+          <line x1={cx - s * 0.9} y1={cy - s * 0.2} x2={cx + s} y2={cy - s} />
+          <circle cx={cx - s * 0.9} cy={cy + s} r={sw} fill={style.fill} stroke="none" />
+        </g>
+      )
 
     case 'crossCircle':
       return (

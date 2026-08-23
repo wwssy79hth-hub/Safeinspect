@@ -20,6 +20,8 @@ export const CATEGORY_STANDARDS: Record<AssetCategory, string[]> = {
   GHK:  ['AS 1657-2018'],
   SS:   ['AS/NZS 1891.4:2009', 'AS/NZS ISO 45001:2018'],
   DB:   ['AS 5532-2013', 'AS/NZS 1891.4:2009'],
+  DA:   ['AS 5532-2013', 'AS/NZS 1891.4:2009'],
+  DN:   ['AS 5532-2013', 'AS/NZS 1891.4:2009'],
   RR:   ['AS/NZS 1891.4:2009', 'EN 795:2012'],
   SPM:  ['AS/NZS 4994.1:2009', 'AS 1657-2018'],
   OSE:  ['AS/NZS 1891.4:2009'],

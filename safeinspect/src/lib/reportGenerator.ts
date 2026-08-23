@@ -18,9 +18,10 @@ import {
   reportTypeConfig, displayStatus, isProposalReport,
   type ReportTypeConfig,
 } from '@/lib/reportTypes'
+import { drawPlanLayoutPage, type PlanLayout } from '@/lib/planPdf'
 import type {
   Inspection, InspectionAsset, AssetCategory,
-  AssetStatus, Profile,
+  AssetStatus, Profile, SitePlan, PlanFeature,
 } from '@/types/database'
 
 // ─── Brand colours (exact matches to Tailwind config) ────────
@@ -217,6 +218,8 @@ interface ReportData {
   photosByAsset: Record<string, Array<{ url: string; caption: string | null }>>
   aerialMapB64: string | null
   signatureB64: string | null
+  /** Drafting-page inputs: one per site plan (roof area) with features */
+  planLayouts: PlanLayout[]
   /** Report-type driven wording + status presentation rules */
   reportType: ReportTypeConfig
   /**
@@ -270,6 +273,44 @@ async function fetchReportData(inspectionId: string): Promise<ReportData> {
     if (url) aerialMapB64 = await loadImageAsBase64(url)
   }
 
+  // Site plans + placed features → drafting pages
+  const [plansRes, featuresRes] = await Promise.all([
+    supabase.from('site_plans').select('*')
+      .eq('inspection_id', inspectionId)
+      .order('sort_order'),
+    supabase.from('plan_features').select('*')
+      .eq('inspection_id', inspectionId)
+      .order('sort_order'),
+  ])
+  const plans = (plansRes.data ?? []) as SitePlan[]
+  const features = (featuresRes.data ?? []) as PlanFeature[]
+
+  const planLayouts: PlanLayout[] = []
+  for (const plan of plans) {
+    const stored = plan.image_path ?? plan.image_url
+    let imageB64: string | null = null
+    if (stored) {
+      const url = await resolveStorageUrl('aerial-maps', stored)
+      if (url) imageB64 = await loadImageAsBase64(url)
+    }
+    let imgW = plan.image_width ?? 0
+    let imgH = plan.image_height ?? 0
+    if (imageB64 && (!imgW || !imgH)) {
+      try {
+        const dims = await getImageDimensions(imageB64)
+        imgW = dims.w
+        imgH = dims.h
+      } catch { /* leave 0 — page renders the no-image placeholder */ }
+    }
+    planLayouts.push({
+      plan,
+      features: features.filter((f) => f.site_plan_id === plan.id),
+      imageB64,
+      imgW,
+      imgH,
+    })
+  }
+
   // Load certifier signature
   let signatureB64: string | null = null
   if (inspection.certifier_signature_url) {
@@ -290,6 +331,7 @@ async function fetchReportData(inspectionId: string): Promise<ReportData> {
     photosByAsset,
     aerialMapB64,
     signatureB64,
+    planLayouts,
     reportType: reportTypeConfig(inspection.issue_type),
     minIntervalMonths,
   }
@@ -970,9 +1012,45 @@ function drawProposedScheduleSummary(d: PDFDrawer, data: ReportData) {
   d.y += 20
 }
 
+// ─── Company logo for the drafting title block ───────────────
+
+async function loadLogoB64(): Promise<string | null> {
+  try {
+    const res = await fetch('/abseal-logo.png')
+    if (!res.ok) return null
+    const blob = await res.blob()
+    return await new Promise((resolve) => {
+      const reader = new FileReader()
+      reader.onload = () => resolve(reader.result as string)
+      reader.onerror = () => resolve(null)
+      reader.readAsDataURL(blob)
+    })
+  } catch {
+    return null
+  }
+}
+
 // ─── Site Layout page ─────────────────────────────────────────
 
 async function drawSiteLayoutPage(d: PDFDrawer, data: ReportData) {
+  // Drafting-style landscape pages: one per roof area, with the
+  // placed features replayed as vectors over the aerial (legend,
+  // icon legend and title block included on the page itself).
+  const drawablePlans = data.planLayouts.filter((p) => p.imageB64)
+  if (drawablePlans.length > 0) {
+    const logoB64 = await loadLogoB64()
+    for (const layout of drawablePlans) {
+      drawPlanLayoutPage(d.doc, layout, {
+        inspection: data.inspection,
+        certifier: data.certifier,
+        issueTitle: data.reportType.label.toUpperCase(),
+        logoB64,
+      })
+    }
+    return
+  }
+
+  // Legacy fallback: no site plans — embed the raw aerial + code legend
   d.doc.addPage()
   d.y = 14
 
@@ -1037,7 +1115,9 @@ async function drawSiteLayoutPage(d: PDFDrawer, data: ReportData) {
 // ─── Sign-off page ────────────────────────────────────────────
 
 function drawSignOffPage(d: PDFDrawer, data: ReportData) {
-  d.doc.addPage()
+  // Explicit portrait: a bare addPage() inherits the previous page's
+  // orientation, which is landscape after the site-layout drafting pages
+  d.doc.addPage('a4', 'portrait')
   d.y = 14
 
   const { inspection, reportType } = data
@@ -1199,6 +1279,10 @@ export async function generateAndDownloadReport(
   const totalPages = doc.getNumberOfPages()
   for (let i = 1; i <= totalPages; i++) {
     doc.setPage(i)
+    // Landscape drafting pages carry their own title block — the
+    // portrait header/footer geometry doesn't apply to them
+    const ps = doc.internal.pageSize
+    if (ps.getWidth() > ps.getHeight()) continue
     drawPageHeaderFooter(doc, i, totalPages, data.inspection)
   }
 
@@ -1246,6 +1330,8 @@ export async function generateAndUploadReport(
   const totalPages = doc.getNumberOfPages()
   for (let i = 1; i <= totalPages; i++) {
     doc.setPage(i)
+    const ps = doc.internal.pageSize
+    if (ps.getWidth() > ps.getHeight()) continue
     drawPageHeaderFooter(doc, i, totalPages, data.inspection)
   }
 
